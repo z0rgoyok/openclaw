@@ -92,7 +92,7 @@ const TELEGRAM_RICH_MESSAGE_PLACEHOLDER = "[unsupported Telegram rich_message re
 
 type TelegramTextMessage = Pick<
   Message,
-  "text" | "caption" | "entities" | "caption_entities" | "poll"
+  "text" | "caption" | "entities" | "caption_entities" | "poll" | "new_chat_members"
 > & { rich_message?: Message.RichMessageMessage["rich_message"] };
 
 function compactRichText(value: string): string {
@@ -272,6 +272,17 @@ export function getTelegramTextParts(msg: TelegramTextMessage): {
   const text = resolveTelegramTextContent(msg.text, msg.caption);
   if (text) {
     return { text, entities: msg.entities ?? msg.caption_entities ?? [] };
+  }
+  const people = (msg.new_chat_members ?? []).filter((member) => !member.is_bot);
+  if (people.length > 0) {
+    const names = people.map((member) => {
+      const name = [member.first_name, member.last_name].filter(Boolean).join(" ").trim();
+      return JSON.stringify(name || member.username || String(member.id));
+    });
+    return {
+      text: `[Telegram service event: new members joined this group: ${names.join(", ")}.]`,
+      entities: [],
+    };
   }
   return { text: msg.poll ? formatTelegramPollText(msg.poll) : "", entities: [] };
 }
