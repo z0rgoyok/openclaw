@@ -43,6 +43,7 @@ import {
   resolveSettledToolBatchEvidence,
   resolveSettledToolTerminalContinuationInstruction,
   shouldTreatEmptyAssistantReplyAsSilent,
+  shouldTreatTerminalAssistantReplyAsSilent,
 } from "./incomplete-turn-recovery.js";
 import {
   hasYieldContinuationEvidence,
@@ -257,12 +258,9 @@ export async function resolveEmbeddedRunTerminal(input: {
   // A failed isolated finalization is terminal for this user turn. Do not let
   // its settled side effects cascade into any ordinary retry family.
   const settledTurnFinalizationAttempted = input.settledTurnFinalizationOutcome !== "not-attempted";
-  const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
-    // The host intentionally suppressed its cron placeholder, not a required model answer.
-    terminalReplyExpectation:
-      input.settledTurnFinalizationOutcome === "silent-fallback"
-        ? "optional"
-        : resolveReplyExpectation(runParams),
+  const emptyAssistantReplyIsSilent = shouldTreatTerminalAssistantReplyAsSilent({
+    runParams,
+    silentFallback: input.settledTurnFinalizationOutcome === "silent-fallback",
     payloadCount,
     aborted: terminalAborted,
     timedOut: terminalTimedOut,
