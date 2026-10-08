@@ -4,7 +4,12 @@ import { MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE } from "../../../llm/types.js"
 import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { isPreDispatchToolCallRejectionMessage } from "../../failover/message-patterns.js";
-import { resolveReplyCompletion, resolveReplyExpectation } from "../../reply-completion.js";
+import { AGENT_LANE_SUBAGENT } from "../../lanes.js";
+import {
+  isSyntheticSourceReplyTurn,
+  resolveReplyCompletion,
+  resolveReplyExpectation,
+} from "../../reply-completion.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import { resolveSourceReplyDelivery } from "../delivery-evidence.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
@@ -24,6 +29,7 @@ import {
   shouldApplyNonVisibleTurnRetryGuard,
   type IncompleteTurnAttempt,
 } from "./incomplete-turn-classification.js";
+import type { RunEmbeddedAgentParams } from "./params.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 // Allow one immediate continuation plus one follow-up continuation before
@@ -138,6 +144,40 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
     (!params.onlyExplicitSilentReply || assistant.silent) &&
     assistant.nonVisibleEligibleForSilentReply
   );
+}
+
+/** User final recovery requires authored silence; host/background silence keeps its contract. */
+export function shouldTreatTerminalAssistantReplyAsSilent(
+  params: Omit<
+    Parameters<typeof shouldTreatEmptyAssistantReplyAsSilent>[0],
+    "terminalReplyExpectation" | "allowEmptyAssistantReplyAsSilent" | "onlyExplicitSilentReply"
+  > & {
+    runParams: Pick<
+      RunEmbeddedAgentParams,
+      | "trigger"
+      | "lane"
+      | "inputProvenance"
+      | "silentExpected"
+      | "terminalReplyExpectation"
+      | "allowEmptyAssistantReplyAsSilent"
+    >;
+    silentFallback: boolean;
+  },
+): boolean {
+  const { runParams, silentFallback } = params;
+  return shouldTreatEmptyAssistantReplyAsSilent({
+    ...params,
+    // The host intentionally suppressed its cron placeholder, not a required model answer.
+    terminalReplyExpectation: silentFallback ? "optional" : resolveReplyExpectation(runParams),
+    onlyExplicitSilentReply:
+      !silentFallback &&
+      runParams.silentExpected !== true &&
+      runParams.lane !== AGENT_LANE_SUBAGENT &&
+      !isSyntheticSourceReplyTurn(runParams) &&
+      (runParams.trigger === undefined ||
+        runParams.trigger === "user" ||
+        runParams.trigger === "manual"),
+  });
 }
 
 /**
