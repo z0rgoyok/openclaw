@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "default": {
+      "agent_defaults": {"silentReply": {"group": "allow"}},
+      "messages": {"ackReactionScope": "all"},
+      "telegram_account": {
+        "ackReaction": "👀",
+        "richMessages": true,
+        "streaming": {"mode": "partial", "preview": {"toolProgress": true, "commandText": "status"}}
+      }
+    },
+    "operator-progress": {
+      "extends": "default",
+      "telegram_account": {
+        "streaming": {
+          "mode": "progress",
+          "progress": {"toolProgress": true, "commandText": "status", "maxLines": 5, "maxLineChars": 100, "commentary": true}
+        }
+      }
+    }
+  }
+}
