@@ -9,6 +9,36 @@ function asTelegramMessage(message: unknown): Message {
 }
 
 describe("getTelegramTextParts", () => {
+  it("projects human joins into service text and excludes bots from a mixed join", () => {
+    const result = getTelegramTextParts(
+      asTelegramMessage({
+        new_chat_members: [
+          { id: 42, is_bot: false, first_name: "Alice", last_name: "Example" },
+          { id: 43, is_bot: true, first_name: "Robot" },
+        ],
+      }),
+    );
+    expect(result).toEqual({
+      text: '[Telegram service event: new members joined this group: "Alice Example".]',
+      entities: [],
+    });
+  });
+
+  it("ignores a join containing only bots", () => {
+    expect(
+      getTelegramTextParts(
+        asTelegramMessage({ new_chat_members: [{ id: 43, is_bot: true, first_name: "Robot" }] }),
+      ),
+    ).toEqual({ text: "", entities: [] });
+  });
+
+  it("ignores an empty member list", () => {
+    expect(getTelegramTextParts(asTelegramMessage({ new_chat_members: [] }))).toEqual({
+      text: "",
+      entities: [],
+    });
+  });
+
   it("projects native Telegram polls into bounded, accurate inbound text", () => {
     const result = getTelegramTextParts(
       asTelegramMessage({
