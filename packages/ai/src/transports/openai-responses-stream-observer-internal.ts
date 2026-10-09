@@ -11,18 +11,6 @@ import type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-inter
 import { log } from "./openai-transport-shared.js";
 import { iterateModelStream } from "./transport-stream-shared.js";
 
-type BoundaryOutput = { output?: AssistantMessage };
-const boundaryOutputs = new WeakMap<object, BoundaryOutput>();
-
-/** Bind the existing message sink to this attempt without extending transport options. */
-export function bindResponsesBoundaryOutput(response: object, output: AssistantMessage): void {
-  const binding = boundaryOutputs.get(response);
-  if (binding) {
-    binding.output = output;
-    boundaryOutputs.delete(response);
-  }
-}
-
 const STRING_DELTA_EVENTS = new Set([
   "response.function_call_arguments.delta",
   "response.output_text.delta",
@@ -32,14 +20,40 @@ const STRING_DELTA_EVENTS = new Set([
   "response.text.delta",
 ]);
 
+/** Explicit attempt lifecycle: keep output available even when stream validation/recovery throws. */
+export function createResponsesAttempt(output: AssistantMessage) {
+  const metadata = createResponsesBoundaryMetadata();
+  let outcome: "completed" | "error" = "error";
+  return {
+    adapt: (stream: AsyncIterable<unknown>, signal?: AbortSignal) =>
+      adaptResponsesStream(stream, signal, metadata),
+    complete<T>(value: T): T {
+      outcome = "completed";
+      return value;
+    },
+    finish() {
+      const details = metadata.finish(output, outcome);
+      if (details) {
+        appendAssistantMessageDiagnostic(output, {
+          type: "openai_responses_empty_boundary",
+          timestamp: Date.now(),
+          details,
+        });
+      }
+    },
+  };
+}
+
 export async function* adaptResponsesStream(
   stream: AsyncIterable<unknown>,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  metadata: ReturnType<typeof createResponsesBoundaryMetadata>,
 ): AsyncGenerator<OpenAIResponsesStreamEvent> {
-  const metadata = createResponsesBoundaryMetadata();
-  const binding: BoundaryOutput = {};
+  let termination: "eof" | "stream_error" | "malformed_event" | "consumer_close" = "consumer_close";
   try {
     for await (const event of iterateModelStream(stream, signal)) {
+      metadata.observe(event);
+      termination = "malformed_event";
       if (!isRecord(event) || typeof event.type !== "string") {
         throw new Error("Responses stream delivered a malformed event without a string type");
       }
@@ -62,28 +76,17 @@ export async function* adaptResponsesStream(
       ) {
         throw new Error(`Responses stream delivered malformed ${event.type} response`);
       }
-      metadata.observe(event);
-      if (
-        (event.type === "response.completed" ||
-          event.type === "response.incomplete" ||
-          event.type === "response.failed") &&
-        isRecord(event.response)
-      ) {
-        boundaryOutputs.set(event.response, binding);
-      }
+      termination = "consumer_close";
       yield event as OpenAIResponsesStreamEvent;
     }
-  } finally {
-    // Iterator close happens after the consumer finishes terminal recovery.
-    const details = metadata.finish(binding.output);
-    if (binding.output && details) {
-      appendAssistantMessageDiagnostic(binding.output, {
-        type: "openai_responses_empty_boundary",
-        timestamp: Date.now(),
-        details,
-      });
+    termination = "eof";
+  } catch (error) {
+    if (termination !== "malformed_event") {
+      termination = "stream_error";
     }
-    binding.output = undefined;
+    throw error;
+  } finally {
+    metadata.noteStreamTermination(termination);
   }
 }
 

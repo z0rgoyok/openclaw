@@ -32,6 +32,7 @@ import {
 } from "./openai-responses-contracts.js";
 import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
+import { decodeResponsesTextSignature } from "./openai-responses-text-signature-internal.js";
 import {
   buildProviderReplayContext,
   providerReplayContextMatches,
@@ -207,24 +208,11 @@ function parseOpenAIResponsesTextSignature(
   if (!signature) {
     return undefined;
   }
-  if (signature.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(signature) as { v?: unknown; id?: unknown; phase?: unknown };
-      if (parsed.v === 1) {
-        const id = typeof parsed.id === "string" ? parsed.id : undefined;
-        const phase =
-          parsed.phase === "commentary" || parsed.phase === "final_answer"
-            ? parsed.phase
-            : undefined;
-        // A reasoning-dropped replay keeps the phase but omits the paired id.
-        if (id !== undefined || phase !== undefined) {
-          return { id, phase };
-        }
-        return undefined;
-      }
-    } catch {
-      // Keep legacy plain-string behavior below.
-    }
+  const facts = decodeResponsesTextSignature(signature);
+  if (facts.kind === "v1") {
+    const phase =
+      facts.phase === "commentary" || facts.phase === "final_answer" ? facts.phase : undefined;
+    return facts.id !== undefined || phase !== undefined ? { id: facts.id, phase } : undefined;
   }
   return { id: signature };
 }

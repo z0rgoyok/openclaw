@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { classifyAssistantTurn } from "../../../../src/agents/embedded-agent-runner/run/incomplete-turn-classification.js";
 import type { AssistantMessage, Model } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { createResponsesBoundaryMetadata } from "./openai-responses-boundary-metadata-internal.js";
+import { convertResponsesMessages } from "./openai-responses-replay-messages-internal.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
+import { decodeResponsesTextSignature } from "./openai-responses-text-signature-internal.js";
 
 const model: Model<"openai-responses"> = {
   id: "synthetic",
@@ -233,5 +236,203 @@ describe("Responses empty boundary metadata", () => {
     expect(result.stopReason).toBe("toolUse");
     expect(result.content).toHaveLength(1);
     expect(boundary(result)).toBeUndefined();
+  });
+});
+
+describe("review regressions through the real Responses adapter", () => {
+  const added = () => ({ type: "response.output_item.added", output_index: 0, item: message("") });
+  const created = () => ({
+    type: "response.created",
+    response: { id: "resp_0123456789abcdef0123456789abcdef", status: "in_progress" },
+  });
+  async function failedAttempt(events: unknown[], failure?: Error) {
+    const result = output();
+    let caught: unknown;
+    async function* source() {
+      yield* events;
+      if (failure) {
+        throw failure;
+      }
+    }
+    try {
+      await processResponsesStream(source(), result, { push() {} }, model);
+    } catch (error) {
+      caught = error;
+    }
+    return { result, caught, details: boundary(result) };
+  }
+  it.each([
+    { type: "response.output_text.done", text: "SECRET_CANARY" },
+    { type: "response.text.done", text: "SECRET_CANARY" },
+    { type: "response.refusal.done", refusal: "SECRET_CANARY" },
+    { type: "response.content_part.done", part: { type: "output_text", text: "SECRET_CANARY" } },
+    { type: "response.content_part.done", part: { type: "refusal", refusal: "SECRET_CANARY" } },
+  ])("F1 counts done-only $type before empty terminal", async (done) => {
+    const result = await run([added(), { ...done, output_index: 0 }, terminal([message("")])]);
+    expect(result.content.every((block) => block.type !== "text" || block.text === "")).toBe(true);
+    expect(boundary(result)).toMatchObject({
+      classification: "wire_nonempty_normalized_empty",
+      wireFinalLength: 13,
+      normalizedFinalLength: 0,
+    });
+    expect(JSON.stringify(boundary(result))).not.toContain("SECRET_CANARY");
+  });
+  it.each([
+    { type: "response.output_audio_transcript.delta", delta: "SECRET_CANARY" },
+    { type: "SECRET_CANARY", text: "SECRET_CANARY" },
+    { type: "response.content_part.done", part: { type: "SECRET_CANARY", text: "SECRET_CANARY" } },
+    {
+      type: "response.content_part.done",
+      part: { type: "output_text", text: { nested: "SECRET_CANARY" } },
+    },
+  ])("F2 preserves uncertainty for unknown/malformed content $type", async (event) => {
+    const result = await run([added(), { ...event, output_index: 0 }, terminal([message("")])]);
+    expect(boundary(result)).toMatchObject({
+      classification: "wire_unknown_normalized_empty",
+      wireUnknown: true,
+    });
+    expect(JSON.stringify(boundary(result))).not.toContain("SECRET_CANARY");
+  });
+  it.each([false, true])(
+    "F3 preserves reset identity and partial evidence (partial=%s)",
+    async (partial) => {
+      const failure = Object.assign(new Error("SECRET_CANARY reset"), { code: "ECONNRESET" });
+      const events = [
+        created(),
+        added(),
+        ...(partial
+          ? [{ type: "response.output_text.delta", output_index: 0, delta: "SECRET_CANARY" }]
+          : []),
+      ];
+      const { result, caught, details } = await failedAttempt(events, failure);
+      expect(caught).toBe(failure);
+      expect(details).toMatchObject({
+        attemptOutcome: "error",
+        streamTermination: "stream_error",
+        terminalObserved: false,
+        responseId: "resp_0123456789abcdef0123456789abcdef",
+        normalizedFinalLength: 0,
+        normalizedPartialFinalLength: partial ? 13 : 0,
+      });
+      expect(
+        result.content.some((block) => block.type === "text" && block.text === "SECRET_CANARY"),
+      ).toBe(partial);
+      expect(JSON.stringify(details)).not.toContain("SECRET_CANARY");
+    },
+  );
+  it("F3 preserves EOF metadata and original missing-terminal exception", async () => {
+    const { caught, details } = await failedAttempt([created()]);
+    expect(String(caught)).toContain("before a terminal response event");
+    expect(details).toMatchObject({
+      attemptOutcome: "error",
+      streamTermination: "eof",
+      wireUnknown: true,
+      eventCount: 1,
+    });
+  });
+  it.each([
+    { type: "response.output_text.delta", delta: { nested: "SECRET_CANARY" } },
+    {
+      type: "response.completed",
+      response: { output: [{ ...message(""), content: { nested: "SECRET_CANARY" } }] },
+    },
+    { type: "response.completed", response: null },
+  ])("F3 preserves diagnostics before malformed finalization $type", async (event) => {
+    const { caught, details } = await failedAttempt([
+      created(),
+      added(),
+      { ...event, output_index: 0 },
+    ]);
+    expect(caught).toBeInstanceOf(Error);
+    expect(details).toMatchObject({ attemptOutcome: "error", wireUnknown: true });
+    expect(JSON.stringify(details)).not.toContain("SECRET_CANARY");
+    if (event.type === "response.output_text.delta") {
+      expect(String(caught)).toContain("malformed response.output_text.delta delta");
+    } else if (event.response === null) {
+      expect(String(caught)).toContain("malformed response.completed response");
+    } else {
+      expect(String(caught)).toContain("some is not a function");
+    }
+  });
+  it.each(["whitespace", "mixed", "ordinary", "silent"])(
+    "F4 crosschecks canonical final classification: %s",
+    async (variant) => {
+      const items =
+        variant === "mixed"
+          ? [
+              { ...message("progress", "commentary"), id: "msg_commentary" },
+              { ...message("legacy"), id: "msg_legacy", phase: undefined },
+            ]
+          : [
+              message(
+                variant === "whitespace" ? " \n\t" : variant === "silent" ? "NO_REPLY" : "ordinary",
+              ),
+            ];
+      const result = await run([terminal(items)]);
+      const canonical = classifyAssistantTurn({
+        payloadCount: 0,
+        attempt: {
+          assistantTexts: [],
+          currentAttemptAssistant: result,
+          currentAttemptCompletedAssistant: undefined,
+        },
+      });
+      expect(canonical.emptyResponse).toBe(variant !== "ordinary");
+      expect(canonical.silent).toBe(variant === "silent");
+      if (canonical.emptyResponse && !canonical.silent) {
+        expect(boundary(result)).toMatchObject({ normalizedFinalLength: 0 });
+      } else {
+        expect(boundary(result)).toBeUndefined();
+      }
+    },
+  );
+  it("stops at the first terminal and preserves terminal-only recovery", async () => {
+    const result = await run([terminal([message("recovered")]), terminal([message("")])]);
+    expect(result.content).toContainEqual(
+      expect.objectContaining({ type: "text", text: "recovered" }),
+    );
+    expect(boundary(result)).toBeUndefined();
+  });
+  it("A1 shares schema facts while preserving replay fallback and diagnostic bounds", () => {
+    for (const [signature, phase, kind] of [
+      [undefined, "absent", "absent"],
+      ["legacy", "absent", "legacy"],
+      ["{bad", "unknown", "invalid"],
+      [
+        JSON.stringify({ v: 2, id: "SECRET_CANARY", phase: "final_answer" }),
+        "unknown",
+        "unsupported",
+      ],
+      [JSON.stringify({ v: 1, id: "SECRET_CANARY", phase: "SECRET_CANARY" }), "unknown", "v1"],
+      [JSON.stringify({ v: 1, phase: "final_answer" }), "final_answer", "v1"],
+      [
+        JSON.stringify({ v: 1, id: "x".repeat(4096), phase: "final_answer" }),
+        "unknown",
+        "over_limit",
+      ],
+    ] as const) {
+      expect(decodeResponsesTextSignature(signature, 4096)).toMatchObject({ kind, phase });
+      const result = output();
+      result.content = [
+        { type: "text", text: "", ...(signature ? { textSignature: signature } : {}) },
+      ];
+      const metadata = createResponsesBoundaryMetadata();
+      metadata.observe(terminal([]));
+      expect(JSON.stringify(metadata.finish(result))).not.toContain("SECRET_CANARY");
+    }
+    const result = output();
+    result.content = [
+      {
+        type: "text",
+        text: "replay",
+        textSignature: JSON.stringify({
+          v: 1,
+          id: "msg_0123456789abcdef0123456789abcdef",
+          phase: "commentary",
+        }),
+      },
+    ];
+    const replay = convertResponsesMessages(model, { messages: [result] }, new Set(["openai"]));
+    expect(replay).toContainEqual(expect.objectContaining({ phase: "commentary" }));
   });
 });
