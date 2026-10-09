@@ -701,7 +701,7 @@ export async function processResponsesStream<TApi extends Api>(
           terminal.recoverTerminalOutput(items, completeToolCall);
         }
         terminalResponse = event.type === "response.completed" ? event.response : null;
-        if (output.stopReason === "stop" && blocks.some((block) => block.type === "toolCall")) {
+        if (output.stopReason === "stop" && output.content.some((b) => b.type === "toolCall")) {
           output.stopReason = "toolUse";
         }
         break;
