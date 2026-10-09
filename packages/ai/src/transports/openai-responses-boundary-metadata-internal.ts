@@ -129,6 +129,12 @@ export function createResponsesBoundaryMetadata() {
       if (type !== "message" || !isRecord(part)) {
         continue;
       }
+      if ((partType === "output_text" || partType === "text") && typeof part.text !== "string") {
+        wireUnknown = true;
+      }
+      if (partType === "refusal" && typeof part.refusal !== "string") {
+        wireUnknown = true;
+      }
       const size =
         partType === "output_text" || partType === "text"
           ? length(part.text)
@@ -341,11 +347,15 @@ export function createResponsesBoundaryMetadata() {
         streamTermination,
         terminalObserved: terminalEvent !== "unknown",
         classification:
-          wireFinalLength > 0
-            ? "wire_nonempty_normalized_empty"
-            : truncated || wireUnknown
-              ? "wire_unknown_normalized_empty"
-              : "wire_empty_normalized_empty",
+          attemptOutcome === "error"
+            ? finalLength > 0
+              ? "attempt_error_normalized_partial"
+              : "attempt_error_without_final"
+            : wireFinalLength > 0
+              ? "wire_nonempty_normalized_empty"
+              : truncated || wireUnknown
+                ? "wire_unknown_normalized_empty"
+                : "wire_empty_normalized_empty",
         responseId,
         status,
         terminalEvent,

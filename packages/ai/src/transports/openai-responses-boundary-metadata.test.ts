@@ -320,6 +320,104 @@ describe("review regressions through the real Responses adapter", () => {
       expect(JSON.stringify(details)).not.toContain("SECRET_CANARY");
     },
   );
+  it.each(["reset", "abort"])(
+    "N1 labels preserved partial text on %s without implying adapter loss",
+    async (mode) => {
+      const result = output();
+      const controller = new AbortController();
+      const reset = Object.assign(new Error("SECRET_CANARY reset"), { code: "ECONNRESET" });
+      async function* source() {
+        yield added();
+        yield { type: "response.output_text.delta", output_index: 0, delta: "abc" };
+        if (mode === "reset") {
+          throw reset;
+        }
+        controller.abort();
+        yield { type: "response.output_text.delta", output_index: 0, delta: "SECRET_CANARY" };
+      }
+      let caught: unknown;
+      try {
+        await processResponsesStream(source(), result, { push() {} }, model, {
+          signal: controller.signal,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      if (mode === "reset") {
+        expect(caught).toBe(reset);
+      } else {
+        expect(String(caught)).toContain("aborted");
+      }
+      expect(result.content).toContainEqual(expect.objectContaining({ type: "text", text: "abc" }));
+      expect(boundary(result)).toMatchObject({
+        classification: "attempt_error_normalized_partial",
+        attemptOutcome: "error",
+        normalizedFinalLength: 0,
+        normalizedPartialFinalLength: 3,
+        normalizedTotalVisibleLength: 3,
+        wireFinalLength: 3,
+      });
+      expect(JSON.stringify(boundary(result))).not.toContain("SECRET_CANARY");
+    },
+  );
+  it("N1 reports an error without final evidence separately from completed text loss", async () => {
+    const { details } = await failedAttempt([created()], new Error("SECRET_CANARY reset"));
+    expect(details).toMatchObject({
+      classification: "attempt_error_without_final",
+      normalizedFinalLength: 0,
+      normalizedPartialFinalLength: 0,
+    });
+    expect(JSON.stringify(details)).not.toContain("SECRET_CANARY");
+  });
+  it.each([
+    { type: "output_text", text: null },
+    { type: "output_text", text: { nested: "SECRET_CANARY" } },
+    { type: "refusal", refusal: null },
+    { type: "refusal", refusal: { nested: "SECRET_CANARY" } },
+  ])("F2/N3 marks malformed known snapshot part $type as uncertain", async (part) => {
+    const malformed = {
+      ...message("", "commentary"),
+      id: "msg_malformed",
+      content: [{ ...part, annotations: [], unexpected: "SECRET_CANARY" }],
+    };
+    // Commentary keeps coercion behavior observable while the distinct final is empty.
+    for (const done of [false, true]) {
+      const result = await run([
+        ...(done ? [{ type: "response.output_item.done", output_index: 0, item: malformed }] : []),
+        terminal([malformed, { ...message(""), id: "msg_empty_final" }]),
+      ]);
+      expect(boundary(result)).toMatchObject({
+        classification: "wire_unknown_normalized_empty",
+        wireUnknown: true,
+      });
+      expect(JSON.stringify(boundary(result))).not.toContain("SECRET_CANARY");
+      expect(
+        result.content.some((block) => block.type === "text" && block.text === "[object Object]"),
+      ).toBe(
+        typeof ("text" in part ? part.text : part.refusal) === "object" &&
+          ("text" in part ? part.text : part.refusal) !== null,
+      );
+    }
+  });
+  it("F2/N3 preserves terminal-only null final text uncertainty", async () => {
+    const result = await run([
+      terminal([
+        {
+          ...message(""),
+          content: [
+            { type: "output_text", text: null, annotations: [], unexpected: "SECRET_CANARY" },
+          ],
+        },
+      ]),
+    ]);
+    expect(result.content).toEqual([]);
+    expect(boundary(result)).toMatchObject({
+      classification: "wire_unknown_normalized_empty",
+      wireUnknown: true,
+      terminalFinalLength: 0,
+    });
+    expect(JSON.stringify(boundary(result))).not.toContain("SECRET_CANARY");
+  });
   it("F3 preserves EOF metadata and original missing-terminal exception", async () => {
     const { caught, details } = await failedAttempt([created()]);
     expect(String(caught)).toContain("before a terminal response event");
