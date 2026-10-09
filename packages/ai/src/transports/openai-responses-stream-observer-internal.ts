@@ -1,6 +1,11 @@
-import type { Model } from "@openclaw/llm-core";
+import type { AssistantMessage, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.js";
 import { emitModelTransportDebug, resolveModelSseDebugMode } from "./model-transport-debug.js";
+import {
+  createResponsesBoundaryMetadata,
+  responsesBoundaryEventType,
+} from "./openai-responses-boundary-metadata-internal.js";
 import { stringifyRedactedEvent } from "./openai-responses-debug.js";
 import type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-internal.js";
 import { log } from "./openai-transport-shared.js";
@@ -15,33 +20,73 @@ const STRING_DELTA_EVENTS = new Set([
   "response.text.delta",
 ]);
 
+/** Explicit attempt lifecycle: keep output available even when stream validation/recovery throws. */
+export function createResponsesAttempt(output: AssistantMessage) {
+  const metadata = createResponsesBoundaryMetadata();
+  let outcome: "completed" | "error" = "error";
+  return {
+    adapt: (stream: AsyncIterable<unknown>, signal?: AbortSignal) =>
+      adaptResponsesStream(stream, signal, metadata),
+    complete<T>(value: T): T {
+      outcome = "completed";
+      return value;
+    },
+    finish() {
+      const details = metadata.finish(output, outcome);
+      if (details) {
+        appendAssistantMessageDiagnostic(output, {
+          type: "openai_responses_empty_boundary",
+          timestamp: Date.now(),
+          details,
+        });
+      }
+    },
+  };
+}
+
 export async function* adaptResponsesStream(
   stream: AsyncIterable<unknown>,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  metadata: ReturnType<typeof createResponsesBoundaryMetadata>,
 ): AsyncGenerator<OpenAIResponsesStreamEvent> {
-  for await (const event of iterateModelStream(stream, signal)) {
-    if (!isRecord(event) || typeof event.type !== "string") {
-      throw new Error("Responses stream delivered a malformed event without a string type");
+  let termination: "eof" | "stream_error" | "malformed_event" | "consumer_close" = "consumer_close";
+  try {
+    for await (const event of iterateModelStream(stream, signal)) {
+      metadata.observe(event);
+      termination = "malformed_event";
+      if (!isRecord(event) || typeof event.type !== "string") {
+        throw new Error("Responses stream delivered a malformed event without a string type");
+      }
+      if (STRING_DELTA_EVENTS.has(event.type) && typeof event.delta !== "string") {
+        throw new Error(`Responses stream delivered malformed ${event.type} delta`);
+      }
+      if (
+        (event.type === "response.output_item.added" ||
+          event.type === "response.output_item.done") &&
+        !isRecord(event.item)
+      ) {
+        throw new Error(`Responses stream delivered malformed ${event.type} item`);
+      }
+      if (
+        (event.type === "response.created" ||
+          event.type === "response.completed" ||
+          event.type === "response.incomplete" ||
+          event.type === "response.failed") &&
+        !isRecord(event.response)
+      ) {
+        throw new Error(`Responses stream delivered malformed ${event.type} response`);
+      }
+      termination = "consumer_close";
+      yield event as OpenAIResponsesStreamEvent;
     }
-    if (STRING_DELTA_EVENTS.has(event.type) && typeof event.delta !== "string") {
-      throw new Error(`Responses stream delivered malformed ${event.type} delta`);
+    termination = "eof";
+  } catch (error) {
+    if (termination !== "malformed_event") {
+      termination = "stream_error";
     }
-    if (
-      (event.type === "response.output_item.added" || event.type === "response.output_item.done") &&
-      !isRecord(event.item)
-    ) {
-      throw new Error(`Responses stream delivered malformed ${event.type} item`);
-    }
-    if (
-      (event.type === "response.created" ||
-        event.type === "response.completed" ||
-        event.type === "response.incomplete" ||
-        event.type === "response.failed") &&
-      !isRecord(event.response)
-    ) {
-      throw new Error(`Responses stream delivered malformed ${event.type} response`);
-    }
-    yield event as OpenAIResponsesStreamEvent;
+    throw error;
+  } finally {
+    metadata.noteStreamTermination(termination);
   }
 }
 
@@ -56,9 +101,9 @@ export async function* observeResponsesStream<TEvent>(
   let eventCount = 0;
   try {
     for await (const event of stream) {
-      const type = isRecord(event) && typeof event.type === "string" ? event.type : "unknown";
-      eventCount += 1;
-      eventTypes.set(type, (eventTypes.get(type) ?? 0) + 1);
+      const type = responsesBoundaryEventType(isRecord(event) ? event.type : undefined);
+      eventCount = Math.min(1_000_000_000, eventCount + 1);
+      eventTypes.set(type, Math.min(1_000_000_000, (eventTypes.get(type) ?? 0) + 1));
       if (eventCount === 1) {
         emitModelTransportDebug(
           log,
