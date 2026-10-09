@@ -31,6 +31,7 @@ import {
   type OpenAIResponsesReasoningReplayMetadata,
 } from "./openai-responses-contracts.js";
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
+import { bindResponsesBoundaryOutput } from "./openai-responses-stream-observer-internal.js";
 import type { ResponsesOutputTracker } from "./openai-responses-stream-slots-internal.js";
 import {
   IncompleteToolCallError,
@@ -310,6 +311,7 @@ export function createResponsesTerminalController(params: {
     >["response"],
     responseId = response.id,
   ) => {
+    bindResponsesBoundaryOutput(response, output);
     output.responseId = responseId || output.responseId;
     output.responseModel = options?.resolveResponseModel
       ? options.resolveResponseModel()?.trim() || undefined

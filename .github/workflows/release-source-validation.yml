@@ -1,0 +1,51 @@
+name: Release source validation
+
+on:
+  push:
+    branches: [fix/arm20-responses-boundary]
+  pull_request:
+    branches: [release/2026.9.8]
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-source-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  native-gates:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Resolve release comparison base
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin release/2026.9.8
+          echo "BASE_SHA=${PR_BASE_SHA:-$(git rev-parse FETCH_HEAD)}" >> "$GITHUB_ENV"
+          git rev-parse HEAD
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.21.0"
+          install-bun: "false"
+          frozen-lockfile: "true"
+          cache-mode: "off"
+          semantic-checks: "true"
+      - name: Build
+        run: pnpm build
+      - name: Repository checks
+        run: pnpm check --base "$BASE_SHA"
+      - name: Test types
+        run: pnpm check:test-types
+      - name: Native tests
+        run: pnpm test
