@@ -201,6 +201,22 @@ describe("Responses empty boundary metadata", () => {
     });
     expect(JSON.stringify(details).length).toBeLessThan(1500);
   });
+  it("preserves normal diagnostic policy when the final block follows more than 64 blocks", () => {
+    const metadata = createResponsesBoundaryMetadata();
+    metadata.observe(terminal([]));
+    const normalized = output();
+    normalized.content = Array.from({ length: 65 }, () => ({
+      type: "text" as const,
+      text: "commentary",
+      textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
+    }));
+    normalized.content.push({
+      type: "text",
+      text: "final",
+      textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+    });
+    expect(metadata.finish(normalized)).toBeUndefined();
+  });
   it("does not change tool admission or add diagnostics to terminal tool completions", async () => {
     const result = await run([
       terminal([

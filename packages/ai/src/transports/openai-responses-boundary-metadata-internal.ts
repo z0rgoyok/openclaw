@@ -217,10 +217,9 @@ export function createResponsesBoundaryMetadata() {
       let finalLength = 0;
       let totalLength = 0;
       let toolCalls = 0;
-      if (output.content.length > LIMIT) {
-        truncated = true;
-      }
-      for (const block of output.content.slice(0, LIMIT)) {
+      // Normalized blocks already exist: aggregate all of them without retaining an item list,
+      // so a late final reply never becomes a false empty-boundary diagnostic.
+      for (const block of output.content) {
         if (block.type === "toolCall") {
           toolCalls = bounded(toolCalls + 1);
         }
