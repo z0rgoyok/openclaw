@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import {
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type SsrFPolicy,
@@ -9,6 +8,40 @@ import {
   type CodexPreparedResponsesRoute,
 } from "./prepared-responses-route.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
+
+// Codex 0.158 (064c6b8), model-provider-info/src/lib.rs:121-182: ConfigToml
+// serializes these Option fields as null when the generated CLI table omits them.
+const NATIVE_NULL_PROVIDER_FIELDS = new Set([
+  "model_catalog_url",
+  "env_key",
+  "env_key_instructions",
+  "experimental_bearer_token",
+  "auth",
+  "gateway_oauth",
+  "aws",
+  "query_params",
+  "http_headers",
+  "env_http_headers",
+  "request_max_retries",
+  "stream_max_retries",
+  "stream_idle_timeout_ms",
+  "websocket_connect_timeout_ms",
+]);
+
+function isPreparedProviderDefinition(definition: unknown, baseUrl: string): boolean {
+  if (!isJsonObject(definition)) {
+    return false;
+  }
+  const expected = buildCodexPreparedResponsesProvider(baseUrl);
+  return (
+    Object.entries(expected).every(([field, value]) => definition[field] === value) &&
+    Object.entries(definition).every(
+      ([field, value]) =>
+        Object.hasOwn(expected, field) ||
+        (NATIVE_NULL_PROVIDER_FIELDS.has(field) && value === null),
+    )
+  );
+}
 
 /** Private transport access belongs to the exact route captured before native startup. */
 export function resolveCodexInferenceUpstreamPolicy(
@@ -37,7 +70,7 @@ export function resolveCodexInferenceUpstreamPolicy(
   return policy;
 }
 
-/** Sparse or flattened overrides cannot add auth or discovery fields to the generated table. */
+/** Native serialization may add known nulls; auth, transport and unknown overrides stay closed. */
 export function assertCodexPreparedProviderConfig(
   config: JsonObject | undefined,
   prepared: CodexPhysicalPreparedResponsesRoute,
@@ -48,7 +81,7 @@ export function assertCodexPreparedProviderConfig(
   const definition = providers?.[prepared.providerId];
   if (
     ((required || definition !== undefined) &&
-      !isDeepStrictEqual(definition, buildCodexPreparedResponsesProvider(baseUrl))) ||
+      !isPreparedProviderDefinition(definition, baseUrl)) ||
     Object.keys(config ?? {}).some((key) =>
       key.startsWith(`model_providers.${prepared.providerId}`),
     )

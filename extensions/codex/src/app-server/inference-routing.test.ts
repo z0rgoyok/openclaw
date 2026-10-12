@@ -13,6 +13,7 @@ import {
   getCodexInferenceThread,
   getCodexInferenceThreadQualification,
 } from "./inference-routing.js";
+import { serializedCodex0158PreparedProvider } from "./prepared-provider-serialization.test-support.js";
 import {
   CODEX_PREPARED_RESPONSES_PROVIDER,
   buildCodexPreparedResponsesProvider,
@@ -169,7 +170,7 @@ describe("managed inference route ownership", () => {
       config: {
         model_provider: providerId,
         model_providers: {
-          [providerId]: buildCodexPreparedResponsesProvider(baseUrl),
+          [providerId]: serializedCodex0158PreparedProvider(baseUrl),
         },
       },
       origins: {},
