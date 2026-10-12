@@ -69,10 +69,7 @@ import {
   type SharedCodexAppServerClientStartup,
   type SharedCodexAppServerClientState,
 } from "./shared-client-lifecycle.js";
-import type {
-  CodexAppServerClientOptions,
-  CodexAppServerClientFactory,
-} from "./shared-client-options.js";
+import type { CodexAppServerClientOptions } from "./shared-client-options.js";
 import { resolveCodexAppServerClientStartContext } from "./shared-client-start-context.js";
 import {
   resolveCodexAppServerSpawnIdentity,
