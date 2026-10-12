@@ -13,6 +13,10 @@ import {
   getCodexInferenceThread,
   getCodexInferenceThreadQualification,
 } from "./inference-routing.js";
+import {
+  CODEX_PREPARED_RESPONSES_PROVIDER,
+  buildCodexPreparedResponsesProvider,
+} from "./prepared-responses-route.js";
 import type { CodexConfigReadResponse } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
 
@@ -98,6 +102,154 @@ async function prepare(
 }
 
 describe("managed inference route ownership", () => {
+  it("preserves native model aliases while admitting auxiliary models on the logical provider", async () => {
+    const h = harness();
+    const signal = new AbortController().signal;
+    const bindModelExecution = vi.fn(() => ({
+      assertCurrent: () => {},
+      signal,
+      release: () => {},
+    }));
+    const bind = createCodexInferenceModelBinding({
+      client: h.client,
+      provider: CODEX_PREPARED_RESPONSES_PROVIDER,
+      logicalProvider: "openai",
+      assertCurrent: () => {},
+      memoryConfigured: () => false,
+      resolveModelThreadId: () => undefined,
+      captureModelSource: async () => ({
+        source: {
+          sourceIdentity: {},
+          modelPolicyRequired: true,
+          assertCurrent: () => {},
+          release: () => {},
+          bindModelExecution,
+        },
+        modelMapping: {
+          nativeModel: { provider: CODEX_PREPARED_RESPONSES_PROVIDER, model: "native-alias" },
+          authorizedModel: { provider: "openai", model: "authored-model" },
+        },
+        assertCurrent: () => {},
+        release: () => {},
+        cancel: () => {},
+        nativeReviewRequired: false,
+        recordNativeReviewRequirement: () => {},
+      }),
+    });
+    for (const model of ["native-alias", "auxiliary-model"]) {
+      const execution = await bind({
+        path: "/responses",
+        body: { model },
+        metadata: { requestKind: "turn", threadId: "root", turnId: "turn" },
+        headers: {},
+        transport: "http",
+        signal,
+      });
+      execution.assertCurrent();
+      execution.release();
+    }
+    expect(bindModelExecution.mock.calls).toEqual([
+      [{ provider: "openai", model: "authored-model" }],
+      [{ provider: "openai", model: "auxiliary-model" }],
+    ]);
+  });
+
+  it("retains one prepared private provider across cached requests and model-policy qualification", async () => {
+    const h = harness({
+      onWrite(line, send) {
+        const request = JSON.parse(line);
+        expect(request.method).toBe("account/read");
+        send({ id: request.id, result: { account: { type: "apiKey" } } });
+      },
+    });
+    const baseUrl = "http://192.168.50.10:8080/v1";
+    const providerId = "openclaw-prepared-responses-synthetic-physical";
+    ownCodexInferenceClient(h.client, {}, undefined, Object.freeze({ baseUrl, providerId }));
+    const snapshot: CodexConfigReadResponse = {
+      config: {
+        model_provider: providerId,
+        model_providers: {
+          [providerId]: buildCodexPreparedResponsesProvider(baseUrl),
+        },
+      },
+      origins: {},
+    };
+    const first = await prepareThread(h.client, snapshot);
+    const second = await prepareThread(h.client, snapshot);
+    expect(first).toBeDefined();
+    if (!first || !second) {
+      throw new Error("expected the prepared private inference route");
+    }
+    expect(second.route).toBe(first.route);
+    expect(first.route.upstream).toBe(baseUrl);
+    expect(first.config).toEqual({
+      model_provider: providerId,
+      model_providers: {
+        [providerId]: buildCodexPreparedResponsesProvider(first.route.baseUrl),
+      },
+    });
+    assertCodexInferenceRouteConfig(h.client, first.route, first.config, "openai");
+    bindCodexInferenceThread(h.client, "prepared-parent", first.route);
+    const qualification = getCodexInferenceThreadQualification(h.client, "prepared-parent");
+    expect(qualification?.hasProvider(providerId)).toBe(true);
+    expect(qualification?.hasProvider("openai")).toBe(false);
+    await expect(
+      prepareThread(h.client, {
+        ...snapshot,
+        config: {
+          ...snapshot.config,
+          model_providers: {
+            [providerId]: buildCodexPreparedResponsesProvider("https://api.openai.com/v1"),
+          },
+        },
+      }),
+    ).rejects.toThrow("configuration changed");
+    expect(() =>
+      assertCodexInferenceRouteConfig(
+        h.client,
+        first.route,
+        {
+          ...first.config,
+          [`model_providers.${providerId}.base_url`]: "https://api.openai.com/v1",
+        },
+        "openai",
+      ),
+    ).toThrow();
+  });
+
+  it.each([
+    "changed provider",
+    "changed authentication",
+    "changed catalog",
+    "changed socket support",
+  ])(
+    "refuses prepared native configuration conflicts before account access: %s",
+    async (conflict) => {
+      const h = harness();
+      const baseUrl = "http://192.168.50.10:8080/v1";
+      const providerId = "openclaw-prepared-responses-synthetic-physical";
+      ownCodexInferenceClient(h.client, {}, undefined, { baseUrl, providerId });
+      const provider = {
+        ...buildCodexPreparedResponsesProvider(baseUrl),
+        ...(conflict === "changed authentication" ? { requires_openai_auth: false } : {}),
+        ...(conflict === "changed catalog"
+          ? { model_catalog_url: "https://chatgpt.com/models" }
+          : {}),
+        ...(conflict === "changed socket support" ? { supports_websockets: true } : {}),
+      };
+      await expect(
+        prepareThread(h.client, {
+          config: {
+            model_provider: conflict === "changed provider" ? "openai" : providerId,
+            model_providers: { [providerId]: provider },
+          },
+          origins: {},
+        }),
+      ).rejects.toThrow("configuration changed");
+      expect(h.writes).toEqual([]);
+    },
+  );
+
   it.each([false, true])(
     "qualifies stock phase1 memory metadata at the binding boundary (configured=%s)",
     async (configured) => {

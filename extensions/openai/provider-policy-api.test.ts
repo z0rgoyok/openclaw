@@ -436,7 +436,7 @@ describe("OpenAI provider policy artifact", () => {
           baseUrl: "https://model.example.test/v1",
           authRequirement: "api-key",
           requestTransportOverrides: "none",
-          runtimePolicy: { compatibleIds: ["openclaw"] },
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
         },
       ],
     });

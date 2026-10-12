@@ -49,6 +49,7 @@ export async function runCodexIsolatedCompletion(
     },
     ...authSelection,
     authRequirement,
+    preparedModelRoute: authorization.plan.modelRoute,
     timeoutMs: params.timeoutMs,
     thinkLevel: params.thinkLevel,
     signal: params.abortSignal,

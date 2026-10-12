@@ -20,6 +20,7 @@ import type { CodexUsageProjection } from "./event-projector-usage.js";
 import { readCodexAppServerConfigOptions, resolveCodexPrivateLauncher } from "./launch-args.js";
 import { readModelListResult, type CodexAppServerModel } from "./models.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
+import { readCodexPreparedResponsesRoute } from "./prepared-responses-route.js";
 import {
   assertCodexThreadStartResponse,
   assertCodexTurnStartResponse,
@@ -37,6 +38,7 @@ import { resolveCodexAppServerReasoningEffort } from "./reasoning-effort.js";
 import {
   isCodexAppServerStartSelectionChangedError,
   type createIsolatedCodexAppServerClient,
+  type CodexAppServerClientOptions,
 } from "./shared-client.js";
 import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
 import {
@@ -100,6 +102,7 @@ type CodexBoundedTurnParams = {
   profile?: string;
   preparedAuth?: CodexAppServerPreparedAuth;
   authRequirement?: CodexAppServerAuthRequirement;
+  preparedModelRoute?: CodexAppServerClientOptions["preparedModelRoute"];
   timeoutMs: number;
   thinkLevel?: Parameters<typeof resolveCodexAppServerReasoningEffort>[0]["thinkLevel"];
   signal?: AbortSignal;
@@ -123,6 +126,12 @@ export async function runBoundedCodexAppServerTurn(
   params: CodexBoundedTurnParams,
 ): Promise<CodexBoundedTurnResult> {
   params.assertCurrent?.();
+  if (readCodexPreparedResponsesRoute(params.preparedModelRoute)) {
+    // Detached bounded operations receive an assertion, not retained source/model authority.
+    throw new Error(
+      "Bounded Codex turns require host source authority for a custom Responses route. Use the host-prepared isolated completion path.",
+    );
+  }
   const appServer = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.options.pluginConfig,
     managedCommandOrder: params.isolation === "private-stdio" ? "package-first" : undefined,
@@ -188,6 +197,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     startOptions,
     ...authSelection,
     authRequirement: params.authRequirement,
+    preparedModelRoute: params.preparedModelRoute,
     agentDir,
     config: params.config,
     timeoutMs,

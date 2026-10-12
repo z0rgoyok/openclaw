@@ -340,14 +340,7 @@ describe("shared Codex app-server client", () => {
     authHandoff: mocks.applyCodexAppServerAuthProfile,
   });
 
-  registerSharedClientInferenceTests((generation, command) => {
-    mocks.desktopGeneration = generation;
-    mocks.resolveManagedCodexAppServerStartOptions.mockImplementation(async (options) =>
-      options.transport === "stdio" && options.commandSource === "managed"
-        ? { ...options, command, commandSource: "resolved-managed" }
-        : options,
-    );
-  }, sendInitializeResult);
+  registerSharedClientInferenceTests(mocks, sendInitializeResult, createInitializingClientHarness);
 
   it("preserves explicit start options over the plugin endpoint", async () => {
     const harness = createInitializingClientHarness();

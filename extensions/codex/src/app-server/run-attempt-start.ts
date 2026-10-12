@@ -91,6 +91,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       computerUseConfig,
       startupAuthProfileId: startupClientAuthProfileId,
       startupAuthRequirement,
+      startupModelRoute: runtimeParams.runtimePlan?.auth.modelRoute,
       startupAuthBindingFingerprint: preparedAuthBinding?.fingerprint,
       ...(runtimeArtifactRequest ? { runtimeArtifactRequest } : {}),
       startupPreparedAuth,

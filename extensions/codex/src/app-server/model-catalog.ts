@@ -14,6 +14,7 @@ import {
   type CodexAppServerModel,
 } from "./models.js";
 import { probeCodexNativeAuth } from "./native-auth.js";
+import { hasAuthoredCodexCustomEndpoint } from "./prepared-responses-route.js";
 import type { CodexGetAccountResponse } from "./protocol.js";
 import { withCodexAppServerJsonClient } from "./request.js";
 import { isCodexResponsesOAuthCredential } from "./responses-oauth.js";
@@ -103,7 +104,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       observations.set(key, observation);
       const configured = readCodexPluginConfig(pluginConfig);
       const discovery = configured.discovery;
-      if (discovery?.enabled === false) {
+      if (discovery?.enabled === false || hasAuthoredCodexCustomEndpoint(params.config)) {
         return [];
       }
       const options = resolveCodexAppServerRuntimeOptions({ pluginConfig });

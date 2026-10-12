@@ -27,10 +27,13 @@ import {
   childTurnCompletedNotification,
 } from "./native-subagent-monitor.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
+import { CODEX_PREPARED_RESPONSES_PROVIDER } from "./prepared-responses-route.js";
 import { isJsonObject } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createParams,
+  createCodexRuntimePlanFixture,
+  createStartedThreadHarness,
   createRuntimeDynamicTool,
   getMockRuntimeIdentity,
   mockCall,
@@ -77,6 +80,65 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 setupRunAttemptTestHooks();
 
 describe("Codex native configuration", () => {
+  it("retains managed search for a main run on a prepared private Responses provider", async () => {
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/start") {
+        const response = threadStartResult();
+        return {
+          ...response,
+          modelProvider: CODEX_PREPARED_RESPONSES_PROVIDER,
+          thread: { ...response.thread, modelProvider: CODEX_PREPARED_RESPONSES_PROVIDER },
+        };
+      }
+      return undefined;
+    });
+    const params = createParams(path.join(tempDir, "session.jsonl"), tempDir, {
+      provider: "openai",
+    });
+    params.config = { tools: { web: { search: { enabled: true } } } };
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.runtimePlan.auth.modelRoute = {
+      provider: "openai",
+      modelId: params.modelId,
+      api: "openai-responses",
+      baseUrl: "http://llm.proxy:8080/v1",
+      authRequirement: "api-key",
+      requestTransportOverrides: "none",
+    };
+    params.resolvedApiKey = "synthetic-proxy-key";
+    setCodexTestToolFactory(params, () => [createRuntimeDynamicTool("web_search")]);
+    setCodexTestModelSupportsTools(params, true);
+    const run = runCodexAppServerAttempt(params);
+    await Promise.race([
+      harness.waitForMethod("turn/start"),
+      run.then((result) => {
+        throw new Error("Attempt ended before managed-search turn", { cause: result });
+      }),
+    ]);
+    try {
+      const start = harness.requests.find((request) => request.method === "thread/start");
+      if (!isJsonObject(start?.params) || !Array.isArray(start.params.dynamicTools)) {
+        throw new Error("Missing native thread tools");
+      }
+      expect(start.params.dynamicTools).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "namespace",
+            name: "openclaw",
+            tools: expect.arrayContaining([
+              expect.objectContaining({ type: "function", name: "web_search" }),
+            ]),
+          }),
+        ]),
+      );
+      expect(start.params.config).toMatchObject({ web_search: "disabled" });
+      expect(start.params.modelProvider).toBe(CODEX_PREPARED_RESPONSES_PROVIDER);
+    } finally {
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+    }
+  });
+
   it.each(["denied", "revoked"] as const)(
     "binds the actual harness retry model when its permission is %s",
     async (permission) => {
