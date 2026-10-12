@@ -22,7 +22,7 @@ import { waitForCodexDesktopGeneration } from "./desktop-generation.js";
 import { resolveManagedCodexAppServerStartOptions } from "./managed-binary.js";
 import { prepareCodexResponsesStartOptions } from "./prepared-responses-route.js";
 import { isCodexResponsesOAuth } from "./responses-oauth.js";
-import type { CodexAppServerClientOptions } from "./shared-client.js";
+import type { CodexAppServerClientOptions } from "./shared-client-options.js";
 
 export async function resolveCodexAppServerClientStartContext(
   options?: CodexAppServerClientOptions,

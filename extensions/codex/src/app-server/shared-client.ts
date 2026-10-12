@@ -6,7 +6,6 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { codexBuildSymbol } from "../build-state.js";
 import { observeCodexCatalogClient } from "../session-catalog-events.js";
 import { CodexAppServerStartupError } from "./attempt-timeouts.js";
@@ -14,14 +13,11 @@ import {
   applyCodexAppServerAuthProfile,
   resolveCodexAppServerHomeDir,
   reconcileCodexComputerUseStartArtifacts,
-  type CodexAppServerPreparedAuth,
-  type CodexAppServerAuthRequirement,
 } from "./auth-bridge.js";
 import {
   resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerPreparedApiKeyCacheKey,
 } from "./auth-cache-key.js";
-import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-profile.js";
 import { resolveCodexAppServerUserHomeDir } from "./auth-start-options.js";
 import {
   ensureCodexAppServerClientRuntime,
@@ -55,7 +51,6 @@ import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {
   canonicalCodexPreparedResponsesArtifactStart,
   createCodexPreparedResponsesPhysicalStart,
-  type CodexPreparedModelRoute,
 } from "./prepared-responses-route.js";
 import { createCodexResponsesOAuth, isCodexResponsesOAuth } from "./responses-oauth.js";
 import {
@@ -74,6 +69,10 @@ import {
   type SharedCodexAppServerClientStartup,
   type SharedCodexAppServerClientState,
 } from "./shared-client-lifecycle.js";
+import type {
+  CodexAppServerClientOptions,
+  CodexAppServerClientFactory,
+} from "./shared-client-options.js";
 import { resolveCodexAppServerClientStartContext } from "./shared-client-start-context.js";
 import {
   resolveCodexAppServerSpawnIdentity,
@@ -82,6 +81,10 @@ import {
 import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
 
 export type { CodexAppServerPreparedAuth } from "./auth-bridge.js";
+export type {
+  CodexAppServerClientOptions,
+  CodexAppServerClientFactory,
+} from "./shared-client-options.js";
 
 export {
   retireSharedCodexAppServerClientIfCurrent,
@@ -266,34 +269,6 @@ export function resolveCodexNativeConfigFenceKey(params: {
         );
   return codexHome ? `codex-home:${path.resolve(codexHome)}` : undefined;
 }
-
-export type CodexAppServerClientOptions = {
-  startOptions?: CodexAppServerStartOptions;
-  pluginConfig?: unknown;
-  timeoutMs?: number;
-  authProfileId?: string | null;
-  authProfileStore?: AuthProfileStore;
-  authBindingFingerprint?: string;
-  /** Setup-only generation whose exact local runtime bytes are captured. */
-  runtimeArtifactMode?: "capture";
-  /** Previously minted exact runtime required before the process may start. */
-  expectedRuntimeArtifact?: AgentHarnessRuntimeArtifactBinding;
-  preparedAuth?: CodexAppServerPreparedAuth;
-  authRequirement?: CodexAppServerAuthRequirement;
-  preparedModelRoute?: CodexPreparedModelRoute;
-  agentId?: string;
-  agentDir?: string;
-  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
-  onStartedClient?: (client: CodexAppServerClient) => void;
-  abandonSignal?: AbortSignal;
-  /** Caller authority for startup of an isolated, caller-owned client. */
-  assertCurrent?: () => void;
-};
-
-/** Factory used by attempt startup and side turns to acquire a leased client. */
-export type CodexAppServerClientFactory = (
-  options?: CodexAppServerClientOptions,
-) => Promise<CodexAppServerClient>;
 
 /** Gets or starts a shared Codex app-server client without retaining a lease. */
 export function getSharedCodexAppServerClient(
