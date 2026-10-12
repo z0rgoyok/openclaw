@@ -57,6 +57,7 @@ vi.mock("./shared-client.js", () => ({
   getLeasedSharedCodexAppServerClient: (...args: unknown[]) =>
     getSharedCodexAppServerClientMock(...args),
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
+  retainSharedCodexAppServerClientIfCurrent: () => undefined,
   releaseCodexAppServerClientLease: vi.fn((lease: { client?: unknown }) => {
     lease.client = undefined;
   }),

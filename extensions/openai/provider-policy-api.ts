@@ -378,6 +378,13 @@ function resolveSingleObservedModelRoute(
         baseUrl: concreteBaseUrl(effectiveBaseUrl, OPENAI_API_BASE_URL),
         authRequirement: customAuthRequirement,
         requestTransportOverrides,
+        ...(customApi === OPENAI_RESPONSES_API &&
+        requestTransportOverrides === "none" &&
+        typeof effectiveBaseUrl === "string" &&
+        !effectiveBaseUrl.includes("?") &&
+        !effectiveBaseUrl.includes("#")
+          ? { runtimePolicy: { compatibleIds: [...CODEX_RUNTIME_COMPATIBLE_IDS] } }
+          : {}),
       },
       effectiveBaseUrl,
     );

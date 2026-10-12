@@ -322,7 +322,7 @@ export function createFakeCodexCompactionClient(
 ): {
   client: CodexAppServerClient;
   request: ReturnType<typeof vi.fn<CodexAppServerClient["request"]>>;
-  close: ReturnType<typeof vi.fn>;
+  close: ReturnType<typeof vi.fn<() => void>>;
   closeAndWait: ReturnType<typeof vi.fn<CodexAppServerClient["closeAndWait"]>>;
   emit: (notification: CodexServerNotification) => void;
   completeCompaction: () => void;

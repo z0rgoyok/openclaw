@@ -253,32 +253,40 @@ describe("runCodexSettledTurnFinalization", () => {
     expect(structuredClone(settledAttempt)).toEqual(settledBefore);
   });
 
-  it("uses the prepared API key without resolving the outer profile", async () => {
-    const attempt = createAttempt("api-key");
-    attempt.resolvedApiKey = "synthetic-resolved-api-key";
-    attempt.model = { ...attempt.model, api: "openai-responses" };
-    const resolveProfile = vi.spyOn(agentAuth, "resolveApiKeyForProfile");
+  it.each(["https://api.openai.com/v1", "http://192.168.50.10:8080/v1"])(
+    "forwards the prepared API key and exact route without resolving the outer profile: %s",
+    async (baseUrl) => {
+      const attempt = createAttempt("api-key");
+      if (!attempt.runtimePlan?.auth.modelRoute) {
+        throw new Error("missing prepared finalization route");
+      }
+      attempt.runtimePlan.auth.modelRoute.baseUrl = baseUrl;
+      attempt.resolvedApiKey = "synthetic-resolved-api-key";
+      attempt.model = { ...attempt.model, api: "openai-responses" };
+      const resolveProfile = vi.spyOn(agentAuth, "resolveApiKeyForProfile");
 
-    const result = await runCodexSettledTurnFinalization(
-      { attempt, settledAttempt: createSettledAttempt() },
-      {},
-    );
+      const result = await runCodexSettledTurnFinalization(
+        { attempt, settledAttempt: createSettledAttempt() },
+        {},
+      );
 
-    expect(mocks.runBounded).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preparedAuth: { kind: "api-key", apiKey: "synthetic-resolved-api-key" },
-        authRequirement: "api-key",
-        authProfileStore: attempt.authProfileStore,
-      }),
-    );
-    expect(mocks.runBounded.mock.calls[0]?.[0]).not.toHaveProperty("profile");
-    expect(resolveProfile).not.toHaveBeenCalled();
-    expect(result.assistant).toMatchObject({
-      api: "openai-responses",
-      provider: "openai",
-      model: "synthetic-summary-model",
-    });
-  });
+      expect(mocks.runBounded).toHaveBeenCalledWith(
+        expect.objectContaining({
+          preparedAuth: { kind: "api-key", apiKey: "synthetic-resolved-api-key" },
+          authRequirement: "api-key",
+          preparedModelRoute: attempt.runtimePlan.auth.modelRoute,
+          authProfileStore: attempt.authProfileStore,
+        }),
+      );
+      expect(mocks.runBounded.mock.calls[0]?.[0]).not.toHaveProperty("profile");
+      expect(resolveProfile).not.toHaveBeenCalled();
+      expect(result.assistant).toMatchObject({
+        api: "openai-responses",
+        provider: "openai",
+        model: "synthetic-summary-model",
+      });
+    },
+  );
 
   it("uses configured transport for remote settled finalization", async () => {
     const attempt = createAttempt();

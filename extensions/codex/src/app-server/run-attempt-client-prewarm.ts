@@ -43,6 +43,7 @@ export function prewarmCodexAttemptClient(params: {
       ? { preparedAuth: startupPreparedAuth }
       : { authProfileId: startupClientAuthProfileId }),
     authRequirement: startupAuthRequirement,
+    preparedModelRoute: runParams.runtimePlan?.auth.modelRoute,
     authProfileStore,
     authBindingFingerprint,
     agentDir,

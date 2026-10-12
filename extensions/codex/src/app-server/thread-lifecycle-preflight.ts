@@ -23,6 +23,7 @@ import {
   bindCodexInferenceThread,
   getCodexInferenceThread,
   prepareCodexInferenceThreadConfig,
+  resolveCodexPreparedResponsesModelProvider,
 } from "./inference-routing.js";
 import {
   assertCodexNativeHookRelayAllowed,
@@ -119,6 +120,10 @@ export async function prepareCodexThreadRequestContext(
     authProfileStore: params.params.authProfileStore,
     agentDir: params.params.agentDir,
     config: params.params.config,
+    preparedModelRoute:
+      options.binding?.preserveNativeModel || options.binding?.connectionScope === "supervision"
+        ? undefined
+        : params.params.runtimePlan?.auth.modelRoute,
   });
   const source = params.params.hostCapabilities.retainSourceAuthority?.();
   const modelPolicyEnforced =
@@ -147,6 +152,10 @@ export async function prepareCodexThreadRequestContext(
   } finally {
     source?.release();
   }
+  startModelSelection.modelProvider = resolveCodexPreparedResponsesModelProvider(
+    params.client,
+    startModelSelection.modelProvider,
+  );
   // Each retry starts from caller configuration, never a previously injected private URL.
   params.config = inference?.config ?? options.config;
   params.inferenceRoute = inference?.route;

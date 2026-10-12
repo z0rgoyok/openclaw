@@ -73,6 +73,7 @@ import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
+import { resolveCodexPreparedResponsesModelProvider } from "./inference-routing.js";
 import {
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
@@ -89,12 +90,7 @@ import {
   assertCodexTurnStartResponse,
   readCodexDynamicToolCallParams,
 } from "./protocol-validators.js";
-import {
-  isJsonObject,
-  type CodexThreadForkParams,
-  type JsonObject,
-  type JsonValue,
-} from "./protocol.js";
+import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 import { resolveCodexProviderWebSearchSupportForClient } from "./provider-capabilities.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
@@ -128,7 +124,9 @@ import {
   type CodexAppServerClientOptions,
 } from "./shared-client.js";
 import { cleanupCodexSideQuestion } from "./side-question-cleanup.js";
+import { forkCodexSideThread } from "./side-question-fork.js";
 import { SIDE_DEVELOPER_INSTRUCTIONS } from "./side-question-instructions.js";
+import { createCodexSidePreparedModelAdmission } from "./side-question-model-source.js";
 import {
   buildCodexRuntimeThreadConfig,
   CODEX_NATIVE_PERSONALITY_NONE,
@@ -286,6 +284,7 @@ export async function runCodexAppServerSideQuestion(
       requestModel: options.runtimeModelId ?? params.model,
       binding,
       inheritBindingAuthProfile: false,
+      preparedModelRoute: preparedRuntimeAuth.plan.modelRoute,
       authProfileId,
       authProfileStore: preparedRuntimeAuth.authProfileStore,
       agentDir: params.agentDir,
@@ -367,6 +366,7 @@ export async function runCodexAppServerSideQuestion(
     startOptions: appServer.start,
     timeoutMs: appServer.requestTimeoutMs,
     authRequirement: preparedRuntimeAuth.plan.modelRoute?.authRequirement,
+    preparedModelRoute: usesSupervisionConnection ? undefined : preparedRuntimeAuth.plan.modelRoute,
     ...(startupPreparedAuth
       ? { preparedAuth: startupPreparedAuth }
       : { authProfileId: connection.clientAuthProfileId }),
@@ -394,6 +394,7 @@ export async function runCodexAppServerSideQuestion(
   } else {
     params.opts?.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
   }
+  let modelAdmission: ReturnType<typeof createCodexSidePreparedModelAdmission>;
   let childThreadId: string | undefined;
   let pluginAppPolicyContext = binding.pluginAppPolicyContext;
   let childClient: CodexAppServerClient | undefined;
@@ -444,6 +445,13 @@ export async function runCodexAppServerSideQuestion(
 
   try {
     assertCurrent();
+    modelAdmission = usesSupervisionConnection
+      ? undefined
+      : createCodexSidePreparedModelAdmission(params, modelSelection.model, {
+          agentId: sessionAgentId,
+          signal: runAbortController.signal,
+          assertCurrent,
+        });
     const autoApproveMcpTools = shouldAutoApproveCodexAppServerApprovals(appServer);
     const projectedMcpServers = loadCodexBundleMcpApprovalConfig({
       workspaceDir: agentWorkspaceDir,
@@ -720,7 +728,12 @@ export async function runCodexAppServerSideQuestion(
                 threadId: binding.threadId,
                 model: modelSelection.model,
                 ...(modelSelection.modelProvider
-                  ? { modelProvider: modelSelection.modelProvider }
+                  ? {
+                      modelProvider: resolveCodexPreparedResponsesModelProvider(
+                        forkClient,
+                        modelSelection.modelProvider,
+                      ),
+                    }
                   : {}),
                 cwd: executionCwd,
                 ...(sessionPermissionPolicy
@@ -738,6 +751,7 @@ export async function runCodexAppServerSideQuestion(
                 threadSource: "user",
               },
               currentRequestOptions(),
+              modelAdmission,
             ),
           );
           if (!response.thread.id.trim() || response.thread.id === binding.threadId) {
@@ -746,6 +760,7 @@ export async function runCodexAppServerSideQuestion(
           }
           childThreadId = response.thread.id;
           childClient = forkClient;
+          await modelAdmission?.publish(forkClient, childThreadId, response.modelProvider);
           collector = new CodexEphemeralTurn(forkClient, childThreadId, {
             textMode: "last",
             onRequest: handleServerRequest,
@@ -866,6 +881,7 @@ export async function runCodexAppServerSideQuestion(
         }),
     );
     turnId = turnResponse.turn.id;
+    modelAdmission?.bindTurn(turnId);
     assertCurrent();
     nativeToolLifecycleProjector = new CodexNativeToolLifecycleProjector(
       { ...sideRunParams, agentId: sessionAgentId },
@@ -950,6 +966,7 @@ export async function runCodexAppServerSideQuestion(
           nativePreToolUseFailures.activateFallback(nativeToolRunWasAbortedBeforeCleanup === true),
         nativePreToolUseFailures.flush,
         releaseSandboxEnvironment,
+        () => modelAdmission?.release(),
         () => releaseCodexAppServerClientLease(clientLease),
         () => nativeHookRelay?.unregister(),
         () =>
@@ -1123,32 +1140,6 @@ function isSideUserInputRequest(
   turnId: string,
 ): boolean {
   return isJsonObject(value) && value.threadId === threadId && value.turnId === turnId;
-}
-
-async function forkCodexSideThread(
-  client: CodexAppServerClient,
-  params: CodexThreadForkParams,
-  options: { timeoutMs: number; signal?: AbortSignal },
-): Promise<unknown> {
-  try {
-    return await client.request("thread/fork", params, options);
-  } catch (error) {
-    if (isMissingCodexParentThreadError(error)) {
-      throw new Error(
-        "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",
-        { cause: error },
-      );
-    }
-    throw error;
-  }
-}
-
-function isMissingCodexParentThreadError(error: unknown): boolean {
-  const message = formatErrorMessage(error);
-  return (
-    message.includes("no rollout found for thread id") ||
-    message.includes("includeTurns is unavailable before first user message")
-  );
 }
 
 function formatCodexErrorMessage(params: JsonObject, rateLimits: JsonValue | undefined): Error {

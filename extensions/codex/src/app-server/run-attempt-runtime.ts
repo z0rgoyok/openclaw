@@ -245,6 +245,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
         ? { preparedAuth: startupPreparedAuth }
         : { authProfileId: startupClientAuthProfileId }),
       authRequirement: connection.startupAuthRequirement,
+      preparedModelRoute: params.runtimePlan?.auth.modelRoute,
       authProfileStore: attemptAuthProfileStore,
       authBindingFingerprint: preparedAuthBinding?.fingerprint,
       ...(connection.runtimeArtifactRequest
@@ -335,6 +336,9 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
             authProfileStore: attemptAuthProfileStore,
             agentDir,
             config: params.config,
+            preparedModelRoute: mutable.startupBinding?.preserveNativeModel
+              ? undefined
+              : params.runtimePlan?.auth.modelRoute,
           }).modelProvider,
       signal: runAbortController.signal,
     });

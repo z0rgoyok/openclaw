@@ -43,9 +43,12 @@ doctor-only legacy state; do not write new legacy Codex GPT refs.
 
 For a Codex-compatible effective route, both profiles above remain candidates
 for the same Codex run. Profile order chooses credentials, not the runtime.
-Changing auth order does not make a custom, Completions, HTTP, or
-request-overridden route Codex-compatible. Valid model-scoped Fast-mode and
-cutoff controls are runtime controls, not request overrides.
+Auth order does not choose the runtime. A configured API-key Responses gateway
+can use an explicitly selected managed local Codex runtime; see
+[Configured Responses gateways](/plugins/codex-harness/routing#configured-responses-gateways).
+Completions and authored request overrides retain their separate compatibility
+rules. Valid model-scoped Fast-mode and cutoff controls are runtime controls,
+not request overrides.
 
 ### Restricted turns and ring zero
 
