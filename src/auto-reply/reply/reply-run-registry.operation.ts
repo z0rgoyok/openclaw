@@ -13,6 +13,10 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
 import {
+  closeReplyOperationBackendReadiness,
+  publishReplyOperationBackend,
+} from "./reply-run-registry.backend-readiness.js";
+import {
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   ReplyRunAlreadyActiveError,
   ReplyRunFollowupAdmissionBlockedError,
@@ -136,6 +140,7 @@ export function createReplyOperation(params: {
   };
   const setResult = (next: ReplyOperationResult) => {
     result = next;
+    closeReplyOperationBackendReadiness(operation);
     toolAuthority.close();
     recordActivity();
   };
@@ -155,6 +160,7 @@ export function createReplyOperation(params: {
       return;
     }
     stateCleared = true;
+    closeReplyOperationBackendReadiness(operation);
     toolAuthority.close();
     terminalSettleTimer.clear();
     finalizationLease.clear();
@@ -366,6 +372,7 @@ export function createReplyOperation(params: {
       }
       replyRunState.activeKeysBySessionId.delete(currentSessionId);
       replyRunState.waitKeysBySessionId.set(currentSessionId, currentSessionKey);
+      closeReplyOperationBackendReadiness(operation);
       currentSessionId = normalizedNextSessionId;
       ownedSessionIds.add(currentSessionId);
       updateFollowupAdmissionSessionId(operation);
@@ -385,6 +392,7 @@ export function createReplyOperation(params: {
       if (update.sessionKey === currentSessionKey) {
         return;
       }
+      closeReplyOperationBackendReadiness(operation);
       const previousKey = currentSessionKey;
       replyRunState.activeRunsByKey.delete(previousKey);
       replyRunState.activeSessionIdsByKey.delete(previousKey);
@@ -419,16 +427,19 @@ export function createReplyOperation(params: {
       recordActivity();
       toolAuthority.bindBackendFingerprint(handle.toolAuthorityFingerprint);
       attachedBackendByOperation.set(operation, handle);
+      publishReplyOperationBackend(operation, handle);
       if (controller.signal.aborted) {
         handle.cancel("superseded");
       }
     },
     detachBackend(handle) {
       if (getAttachedBackend(operation) === handle) {
+        closeReplyOperationBackendReadiness(operation);
         attachedBackendByOperation.delete(operation);
       }
     },
     freezeAbort() {
+      closeReplyOperationBackendReadiness(operation, true);
       abortFrozenOperations.add(operation);
       detachUpstreamAbort();
       finalizationLease.begin();
