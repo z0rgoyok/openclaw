@@ -19,12 +19,14 @@ import {
   type FollowupRun,
 } from "./queue.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
+import { captureReplyOperationBackendReadiness } from "./reply-run-registry.backend-readiness.js";
 import {
   beginReplyMessageInjectionTarget,
   finalizeReplyMessageInjectionAttempt,
   type ReplyOperation,
   replyRunRegistry,
 } from "./reply-run-registry.js";
+import { getAttachedBackend } from "./reply-run-registry.state.js";
 import { refreshReplyOperationTyping } from "./reply-run-typing.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -97,9 +99,18 @@ export async function runActiveReplySteer(
   const steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
   // Capture exact injection authority before parking or awaiting admission.
   // A same-key successor must never inherit this turn's steer or abort.
-  const injectionTarget =
+  let injectionTarget =
     activeReplyOperation && replyRunRegistry.get(activeReplyOperation.key) === activeReplyOperation
       ? replyRunRegistry.resolveCurrentMessageInjectionTarget(activeReplyOperation.key)
+      : undefined;
+  const backendReadiness =
+    !injectionTarget &&
+    activeReplyOperation &&
+    replyRunRegistry.get(activeReplyOperation.key) === activeReplyOperation &&
+    activeReplyOperation.phase === "running" &&
+    activeReplyOperation.toolAuthorityFingerprint &&
+    !getAttachedBackend(activeReplyOperation)
+      ? captureReplyOperationBackendReadiness(activeReplyOperation)
       : undefined;
   const parked = parkSteerCandidate(queueKey, followupRun, resolvedQueue, runFollowup);
   if (!parked) {
@@ -149,6 +160,15 @@ export async function runActiveReplySteer(
     if (admission === "fallback") {
       return await fallback();
     }
+    let pendingBackend: Awaited<ReturnType<NonNullable<typeof backendReadiness>["wait"]>>;
+    if (!injectionTarget && backendReadiness && activeReplyOperation) {
+      pendingBackend = await backendReadiness.wait(resolveFollowupAbortSignal(followupRun));
+      if (pendingBackend && backendReadiness.isBackendCurrent(pendingBackend)) {
+        injectionTarget = replyRunRegistry.resolveCurrentMessageInjectionTarget(
+          activeReplyOperation.key,
+        );
+      }
+    }
     if (!injectionTarget) {
       return await fallback("no injectable reply operation");
     }
@@ -189,14 +209,18 @@ export async function runActiveReplySteer(
     const injectionAttempt = beginReplyMessageInjectionTarget(injectionTarget, followupRun.prompt, {
       currentInboundContext: followupRun.currentInboundContext,
       inboundAudio: followupRun.currentInboundAudio === true,
-      assertCurrent: automaticFallbackRoute
-        ? () => {
-            followupRun.operatorAuthority?.assertCurrent();
-            if (!isCurrentFallback()) {
-              throw new Error("Automatic model fallback changed during steering admission");
+      assertCurrent:
+        pendingBackend || automaticFallbackRoute
+          ? () => {
+              followupRun.operatorAuthority?.assertCurrent();
+              if (pendingBackend && !backendReadiness?.isBackendCurrent(pendingBackend)) {
+                throw new Error("Original reply backend changed during steering admission");
+              }
+              if (!isCurrentFallback()) {
+                throw new Error("Automatic model fallback changed during steering admission");
+              }
             }
-          }
-        : followupRun.operatorAuthority?.assertCurrent,
+          : followupRun.operatorAuthority?.assertCurrent,
       steeringMode: "all",
       isInboundUserMessage:
         followupRun.currentInboundEventKind !== "room_event" &&

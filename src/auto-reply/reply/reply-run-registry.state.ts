@@ -65,6 +65,16 @@ type ReplyRunState = {
   clearOperationByOperation?: WeakMap<ReplyOperation, () => void>;
   executionStartedOperations?: WeakSet<ReplyOperation>;
   lifecycleAdmissionByOperation?: WeakMap<ReplyOperation, ReplyOperationAdmission>;
+  backendReadinessByOperation?: WeakMap<ReplyOperation, ReplyOperationBackendReadiness>;
+  attachedBackendByOperation?: WeakMap<ReplyOperation, ReplyBackendHandle>;
+};
+
+export type ReplyOperationBackendReadiness = {
+  backend?: ReplyBackendHandle;
+  promise: Promise<ReplyBackendHandle | undefined>;
+  resolve: (backend?: ReplyBackendHandle) => void;
+  settled: boolean;
+  closed: boolean;
 };
 
 const REPLY_RUN_STATE_KEY = Symbol.for("openclaw.replyRunRegistry");
@@ -213,7 +223,10 @@ export function isReplyOperationPreBackendPhase(phase: ReplyOperationPhase): boo
   );
 }
 
-export const attachedBackendByOperation = new WeakMap<ReplyOperation, ReplyBackendHandle>();
+export const attachedBackendByOperation = (replyRunState.attachedBackendByOperation ??= new WeakMap<
+  ReplyOperation,
+  ReplyBackendHandle
+>());
 const executionStartedOperations =
   replyRunState.executionStartedOperations ??
   (replyRunState.executionStartedOperations = new WeakSet<ReplyOperation>());
@@ -676,6 +689,11 @@ export function clearReplyRunState(params: {
       source.databaseIdentity,
       mergeReplyRunAdmissionSource(source, observation.sources.get(source.databaseIdentity)),
     );
+  }
+  const backendReadiness = replyRunState.backendReadinessByOperation?.get(params.operation);
+  if (backendReadiness) {
+    backendReadiness.closed = true;
+    backendReadiness.resolve();
   }
   replyRunState.activeRunsByKey.delete(params.sessionKey);
   replyRunState.activeSessionIdsByKey.delete(params.sessionKey);
