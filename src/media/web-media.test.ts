@@ -995,7 +995,7 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("text/html");
   });
 
-  it("allows exact marked outbound HTML bytes and rejects same-size replacements", async () => {
+  it("allows authorized outbound HTML bytes after a same-size replacement", async () => {
     const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-state-"));
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
@@ -1018,14 +1018,14 @@ describe("loadWebMedia", () => {
         expect(allowed.trustedGeneratedHtmlSource).toBe(true);
 
         await fs.writeFile(saved.path, replacement);
-        await expectLoadWebMediaErrorCode(loadWithHostRead(saved.path), "path-not-allowed");
+        expect((await loadWithHostRead(saved.path)).buffer).toEqual(replacement);
       });
     } finally {
       await fs.rm(stateRoot, { recursive: true, force: true });
     }
   });
 
-  it("rejects unmarked outbound HTML", async () => {
+  it("allows authorized unmarked outbound HTML", async () => {
     const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-state-"));
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
@@ -1037,14 +1037,14 @@ describe("loadWebMedia", () => {
           1024 * 1024,
           "report.html",
         );
-        await expectLoadWebMediaErrorCode(loadWithHostRead(saved.path), "path-not-allowed");
+        expect((await loadWithHostRead(saved.path)).contentType).toBe("text/html");
       });
     } finally {
       await fs.rm(stateRoot, { recursive: true, force: true });
     }
   });
 
-  it("requires a marker when outbound staging is nested under the trusted temp root", async () => {
+  it("allows authorized outbound HTML nested under the temp root", async () => {
     const stateRoot = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "web-media-overlap-state-"),
     );
@@ -1059,7 +1059,7 @@ describe("loadWebMedia", () => {
           "report.html",
         );
         expect(path.resolve(saved.path)).toContain(path.resolve(resolvePreferredOpenClawTmpDir()));
-        await expectLoadWebMediaErrorCode(loadWithHostRead(saved.path), "path-not-allowed");
+        expect((await loadWithHostRead(saved.path)).contentType).toBe("text/html");
       });
     } finally {
       await fs.rm(stateRoot, { recursive: true, force: true });
@@ -1084,9 +1084,22 @@ describe("loadWebMedia", () => {
         await markTrustedGeneratedHtmlPath(saved.path, html);
         await fs.rm(saved.path);
         await pruneStaleTrustedGeneratedHtmlMarkers();
+        const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+        const { executeSqliteQuerySync, getNodeSqliteKysely } =
+          await import("../infra/kysely-sync.js");
+        const { db } = openOpenClawStateDatabase();
+        expect(
+          executeSqliteQuerySync(
+            db,
+            getNodeSqliteKysely(db)
+              .selectFrom("outbound_media_provenance")
+              .selectAll()
+              .where("realpath", "=", saved.path),
+          ).rows,
+        ).toHaveLength(0);
         await fs.writeFile(saved.path, html);
 
-        await expectLoadWebMediaErrorCode(loadWithHostRead(saved.path), "path-not-allowed");
+        expect((await loadWithHostRead(saved.path)).contentType).toBe("text/html");
       });
     } finally {
       await fs.rm(stateRoot, { recursive: true, force: true });
@@ -1192,12 +1205,20 @@ describe("loadWebMedia", () => {
     }
   });
 
-  it("rejects host-read HTML files outside the trusted OpenClaw temp root", async () => {
+  it("allows authorized host-read HTML outside OpenClaw temp without expanding roots", async () => {
     const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-host-html-"));
     const htmlFile = path.join(outsideRoot, "report.html");
     await fs.writeFile(htmlFile, "<!doctype html><title>Report</title><h1>Report</h1>\n", "utf8");
     try {
-      await expectLoadWebMediaErrorCode(loadWithHostRead(htmlFile), "path-not-allowed");
+      const readFile = vi.fn(async (filePath: string) => await fs.readFile(filePath));
+      const options = { localRoots: [outsideRoot], readFile, hostReadCapability: true };
+      expect((await loadWebMedia(htmlFile, options)).contentType).toBe("text/html");
+      readFile.mockClear();
+      await expectLoadWebMediaErrorCode(
+        loadWebMedia(htmlFile, { ...options, localRoots: [fixtureRoot] }),
+        "path-not-allowed",
+      );
+      expect(readFile).not.toHaveBeenCalled();
     } finally {
       await fs.rm(outsideRoot, { recursive: true, force: true });
     }

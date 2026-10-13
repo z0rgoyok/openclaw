@@ -37,6 +37,47 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     channelPluginMocks.getLoadedChannelPlugin.mockReset();
   });
 
+  it.each(["main", "arm", "dance", "pattita"])(
+    "loads HTML only within the existing %s reader boundary",
+    async (agentId) => {
+      const base = tempDirs.make("media-agent-html-");
+      const workspace = path.join(base, agentId);
+      const sibling = path.join(base, "other-agent");
+      await fs.mkdir(workspace);
+      await fs.mkdir(sibling);
+      const bytes = Buffer.from("<!doctype html><html><body>Schedule</body></html>");
+      const source = path.join(workspace, "schedule.html");
+      const outside = path.join(sibling, "private.html");
+      await fs.writeFile(source, bytes);
+      await fs.writeFile(outside, bytes);
+      const cfg: OpenClawConfig = {
+        tools: { allow: ["read"] },
+        agents: { list: [{ id: agentId, workspace }] },
+      };
+      const access = resolveAgentScopedOutboundMediaAccess({ cfg, agentId });
+      const options = buildOutboundMediaLoadOptions({ maxBytes: 1024, mediaAccess: access });
+      expect(options.hostReadCapability).toBe(true);
+      const result = await loadWebMediaRaw(source, options);
+      expect(result.contentType).toBe("text/html");
+      expect(result.buffer).toEqual(bytes);
+      await expect(loadWebMediaRaw(outside, options)).rejects.toMatchObject({
+        code: "path-not-allowed",
+      });
+      const link = path.join(workspace, "linked.html");
+      await fs.symlink(outside, link);
+      await expect(loadWebMediaRaw(link, options)).rejects.toMatchObject({
+        code: "path-not-allowed",
+      });
+      await expect(
+        loadWebMediaRaw(source, { ...options, maxBytes: bytes.length - 1 }),
+      ).rejects.toThrow(/limit/i);
+      await fs.writeFile(source, Buffer.from([0xff, 0x00, 0x01]));
+      await expect(loadWebMediaRaw(source, options)).rejects.toMatchObject({
+        code: "path-not-allowed",
+      });
+    },
+  );
+
   it.each([false, true])("reads from the selected workspace (explicit=%s)", async (explicit) => {
     const base = tempDirs.make("media-workspace-selection-");
     const provided = path.join(base, "provided");
