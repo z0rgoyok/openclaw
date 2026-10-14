@@ -30,7 +30,7 @@ import { createCompactionTracker } from "./openai-responses-compaction-replay.js
 import { OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY } from "./openai-responses-contracts.js";
 import { normalizeResponsesFailedEvent, ResponsesStreamFailure } from "./openai-responses-debug.js";
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
-import { adaptResponsesStream } from "./openai-responses-stream-observer-internal.js";
+import { createResponsesAttempt } from "./openai-responses-stream-observer-internal.js";
 import {
   appendResponsesPendingTextDelta,
   createResponsesOutputTracker,
@@ -299,7 +299,8 @@ export async function processResponsesStream<TApi extends Api>(
     };
   };
 
-  const guardedStream = adaptResponsesStream(
+  const attempt = createResponsesAttempt(output);
+  const guardedStream = attempt.adapt(
     withFirstStreamEventTimeout(openaiStream, {
       provider: model.provider,
       api: model.api,
@@ -700,10 +701,7 @@ export async function processResponsesStream<TApi extends Api>(
           terminal.recoverTerminalOutput(items, completeToolCall);
         }
         terminalResponse = event.type === "response.completed" ? event.response : null;
-        if (
-          output.stopReason === "stop" &&
-          output.content.some((block) => block.type === "toolCall")
-        ) {
+        if (output.stopReason === "stop" && output.content.some((b) => b.type === "toolCall")) {
           output.stopReason = "toolUse";
         }
         break;
@@ -737,8 +735,9 @@ export async function processResponsesStream<TApi extends Api>(
     if (terminalResponse === undefined) {
       throw new Error("OpenAI Responses stream ended before a terminal response event");
     }
-    return terminalResponse ?? undefined;
+    return attempt.complete(terminalResponse ?? undefined);
   } finally {
+    attempt.finish();
     for (const block of output.content) {
       delete (block as { partialJson?: string }).partialJson;
     }
