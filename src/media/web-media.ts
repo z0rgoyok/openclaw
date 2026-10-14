@@ -36,6 +36,7 @@ import { resolveUserPath } from "../utils.js";
 import { chunkItems } from "../utils/chunk-items.js";
 import { readOutboundMediaFile } from "./bounded-read-file.js";
 import { readRemoteMediaBuffer } from "./fetch.js";
+import { getValidatedHostReadText, isValidatedHostReadText } from "./host-read-text.js";
 import { ImageOptimizationLimitError } from "./image-optimization-error.js";
 import { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
 import { createImageProcessorWithPixelLimits } from "./image-processor.js";
@@ -68,7 +69,7 @@ export type WebMediaResult = {
   contentType?: string;
   kind: MediaKind | undefined;
   fileName?: string;
-  /** Source bytes came from a generated-HTML trust boundary. */
+  /** Validated HTML bytes came from an authorized source and may be staged with provenance. */
   trustedGeneratedHtmlSource?: boolean;
 };
 
@@ -201,13 +202,12 @@ const HOST_READ_TEXT_PLAIN_ALIASES = new Set([
   "application/json",
   "application/yaml",
 ]);
-// HTML remains deliberately outside the host-read allowlist pending a separate
-// security-boundary review, but extension-declared .html files still need to
-// fail closed instead of falling through to binary/media sniffing.
+// HTML has its own source/provenance and content checks; extension-declared
+// .html files must not fall through to binary/media sniffing.
 const HOST_READ_DECLARED_TEXT_MIMES = new Set([...HOST_READ_TEXT_PLAIN_ALIASES, "text/html"]);
 const HOST_READ_DECLARED_TEXT_ERROR =
   "hostReadCapability permits only validated plain-text documents " +
-  "and trusted generated HTML reports for local reads";
+  "and authorized HTML reports for local reads";
 const HOST_READ_TEXT_PLAIN_EXTENSION_BY_MIME: Record<string, readonly string[]> = {
   "text/plain": [".txt"],
 };
@@ -217,91 +217,6 @@ function stripLegacyMediaDirectivePrefix(mediaUrl: string): string {
     return mediaUrl;
   }
   return mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
-}
-
-function getTextStats(text: string): { printableRatio: number } {
-  if (!text) {
-    return { printableRatio: 0 };
-  }
-  let printable = 0;
-  let control = 0;
-  for (const char of text) {
-    const code = char.codePointAt(0) ?? 0;
-    if (code === 9 || code === 10 || code === 13 || code === 32) {
-      printable += 1;
-      continue;
-    }
-    if (code < 32 || (code >= 0x7f && code <= 0x9f)) {
-      control += 1;
-      continue;
-    }
-    printable += 1;
-  }
-  const total = printable + control;
-  if (total === 0) {
-    return { printableRatio: 0 };
-  }
-  return { printableRatio: printable / total };
-}
-
-function hasSingleByteTextShape(buffer: Buffer): boolean {
-  if (buffer.length === 0) {
-    return true;
-  }
-  let asciiText = 0;
-  let control = 0;
-  for (const byte of buffer) {
-    if (byte === 9 || byte === 10 || byte === 13 || (byte >= 0x20 && byte <= 0x7e)) {
-      asciiText += 1;
-      continue;
-    }
-    if (byte < 0x20 || byte === 0x7f) {
-      control += 1;
-    }
-  }
-  const total = buffer.length;
-  const highBytes = total - asciiText - control;
-  return control === 0 && asciiText / total >= 0.7 && highBytes / total <= 0.3;
-}
-
-function decodeHostReadText(buffer: Buffer): string | undefined {
-  if (buffer.length === 0) {
-    return "";
-  }
-  // UTF-16 decoding is intentionally omitted: TextDecoder("utf-16le/be") never throws on
-  // arbitrary byte pairs, so every byte pair is a valid (if meaningless) Unicode scalar —
-  // an attacker can prepend a BOM and pass getTextStats with printableRatio≈1.0 on pure
-  // binary garbage. The Latin-1 path below already covers the most common non-UTF-8
-  // real-world case (Excel CSV exports with accented chars like é, ñ) while remaining
-  // safe because hasSingleByteTextShape gates on byte shape *before* any decode.
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
-  } catch {
-    if (!hasSingleByteTextShape(buffer)) {
-      return undefined;
-    }
-    // WHATWG latin1 decodes common Excel-style single-byte exports via Windows-1252 mapping.
-    return new TextDecoder("latin1").decode(buffer);
-  }
-}
-
-function isValidatedHostReadText(buffer?: Buffer): boolean {
-  return getValidatedHostReadText(buffer) !== undefined;
-}
-
-function getValidatedHostReadText(buffer?: Buffer): string | undefined {
-  if (!buffer) {
-    return undefined;
-  }
-  if (buffer.length === 0) {
-    return "";
-  }
-  const text = decodeHostReadText(buffer);
-  if (text === undefined) {
-    return undefined;
-  }
-  const { printableRatio } = getTextStats(text);
-  return printableRatio > 0.95 ? text : undefined;
 }
 
 function resolveLocalMediaFileName(filePath: string): string | undefined {
@@ -318,6 +233,7 @@ function hasHtmlDocumentShape(text: string): boolean {
 
 type HostReadHtmlTrust =
   | { source: "temp-root" }
+  | { source: "authorized-read" }
   | { source: "outbound"; expectedSha256: string; expectedSize: number };
 
 const TRUSTED_GENERATED_HTML_MARKER_VERSION = 1;
@@ -351,6 +267,7 @@ async function getTrustedGeneratedHtmlMarker(
 
 async function resolveTrustedGeneratedHostReadHtml(
   filePath: string | undefined,
+  authorizedRead = false,
 ): Promise<HostReadHtmlTrust | undefined> {
   if (!filePath) {
     return undefined;
@@ -375,7 +292,10 @@ async function resolveTrustedGeneratedHostReadHtml(
       ? { source: "outbound", expectedSha256: marker.sha256, expectedSize: marker.size }
       : undefined;
   }
-  return tmpRoot && isPathInside(tmpRoot, resolvedFilePath) ? { source: "temp-root" } : undefined;
+  if (tmpRoot && isPathInside(tmpRoot, resolvedFilePath)) {
+    return { source: "temp-root" };
+  }
+  return authorizedRead ? { source: "authorized-read" } : undefined;
 }
 
 /** Records exact-byte provenance for a trusted generated HTML staged outbound. */
@@ -480,7 +400,7 @@ function isTrustedGeneratedHostReadHtml(params: {
   if (text === undefined || !hasHtmlDocumentShape(text)) {
     return false;
   }
-  if (params.trustedGeneratedHtmlPath.source === "temp-root") {
+  if (params.trustedGeneratedHtmlPath.source !== "outbound") {
     return true;
   }
   return (
@@ -1110,7 +1030,15 @@ async function loadWebMediaInternal(
     : undefined;
   const htmlTrust =
     hostReadDeclaredMime === "text/html"
-      ? await resolveTrustedGeneratedHostReadHtml(mediaUrl)
+      ? await resolveTrustedGeneratedHostReadHtml(
+          mediaUrl,
+          Boolean(
+            readFileOverride &&
+            !sandboxValidated &&
+            Array.isArray(localRoots) &&
+            localRoots.length > 0,
+          ),
+        )
       : undefined;
   if (hostReadDeclaredMime === "text/html" && !htmlTrust) {
     throw new HostReadMediaTypeError(HOST_READ_DECLARED_TEXT_ERROR);
