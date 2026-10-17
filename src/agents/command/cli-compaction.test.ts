@@ -5,6 +5,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  defaultSettingsManager,
+  prepareCompactionScenario,
+} from "../../../test/helpers/agents/cli-compaction-scenario.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
@@ -31,12 +35,7 @@ import {
   runCliTurnCompactionLifecycle,
   setCliCompactionTestDeps,
 } from "./cli-compaction.js";
-import {
-  buildContextEngine,
-  systemCompactionHost,
-  defaultSettingsManager,
-  prepareCompactionScenario,
-} from "./cli-compaction.test-support.js";
+import { buildContextEngine, systemCompactionHost } from "./cli-compaction.test-support.js";
 import { recordCliCompactionInStore as recordCliCompactionInStoreImpl } from "./session-store.js";
 
 type CliCompactionTestDeps = Parameters<typeof setCliCompactionTestDeps>[0];
