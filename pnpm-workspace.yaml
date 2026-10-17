@@ -35,6 +35,10 @@ verifyDepsBeforeRun: false
 blockExoticSubdeps: true
 
 overrides:
+  # Bind MCP OAuth credentials to their issuer; cover pinned transitive SDK consumers.
+  "@modelcontextprotocol/sdk": 1.31.0
+  # Reject malicious indexed source-map offsets during dependency/tooling parsing.
+  source-map-js: 1.2.2
   # Memory LanceDB supplies vectors; WhatsApp prepares thumbnails with Rastermill.
   "@lancedb/lancedb>@huggingface/transformers": "-"
   "baileys>sharp": "-"

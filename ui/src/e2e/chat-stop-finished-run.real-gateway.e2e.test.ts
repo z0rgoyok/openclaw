@@ -13,6 +13,7 @@ import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { navigateToControlUiSession } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:stop-finished";
@@ -377,9 +378,33 @@ suite.define(() => {
                 stage = "open same-origin authenticated Chat";
                 await page.goto(url.href);
                 await waitForControlUiGatewayReady(page);
+                stage = "qualify the selected session before Send";
+                await navigateToControlUiSession(page, sessionKey);
+                await expect.poll(browserState, { timeout: 15_000 }).toMatchObject({
+                  sessionKey,
+                  runId: null,
+                  sending: false,
+                  loading: false,
+                });
                 const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
                 await composer.fill("Finish this fixture turn.");
+                stage = "qualify exact chat.send admission";
                 await page.getByRole("button", { name: "Send message", exact: true }).click();
+                await expect
+                  .poll(() => sent.find((frame) => frame.method === "chat.send"), {
+                    timeout: 15_000,
+                  })
+                  .toBeDefined();
+                const send = sent.find((frame) => frame.method === "chat.send");
+                const sessionId = send?.params?.sessionId;
+                if (!send || !runId || typeof sessionId !== "string") {
+                  throw new Error(
+                    "UNQUALIFIED: chat.send did not capture the exact session and run",
+                  );
+                }
+                await expect
+                  .poll(() => received.find((frame) => frame.id === send.id), { timeout: 15_000 })
+                  .toMatchObject({ ok: true, payload: { runId, status: "started" } });
                 const stop = page.getByRole("button", { name: "Stop generating", exact: true });
                 await stop.waitFor({ state: "visible" });
                 stage = "qualify active ownership before releasing provider";
@@ -391,16 +416,6 @@ suite.define(() => {
                 });
                 expect((await browserState()).runId).toBe(runId);
                 await expect.poll(() => provider.requests(), { timeout: 15_000 }).toBe(1);
-                const send = sent.find((frame) => frame.method === "chat.send");
-                const sessionId = send?.params?.sessionId;
-                if (!send || !runId || typeof sessionId !== "string") {
-                  throw new Error(
-                    "UNQUALIFIED: chat.send did not capture the exact session and run",
-                  );
-                }
-                await expect
-                  .poll(() => received.find((frame) => frame.id === send.id), { timeout: 15_000 })
-                  .toMatchObject({ ok: true, payload: { runId, status: "started" } });
                 await expect.poll(sessionRow, { timeout: 15_000 }).toMatchObject({
                   key: sessionKey,
                   sessionId,

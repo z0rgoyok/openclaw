@@ -5,6 +5,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  defaultSettingsManager,
+  prepareCompactionScenario,
+} from "../../../test/helpers/agents/cli-compaction-scenario.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
@@ -31,32 +35,11 @@ import {
   runCliTurnCompactionLifecycle,
   setCliCompactionTestDeps,
 } from "./cli-compaction.js";
-import {
-  buildContextEngine,
-  systemCompactionHost,
-  writeSessionFile,
-} from "./cli-compaction.test-support.js";
+import { buildContextEngine, systemCompactionHost } from "./cli-compaction.test-support.js";
 import { recordCliCompactionInStore as recordCliCompactionInStoreImpl } from "./session-store.js";
 
 type CliCompactionTestDeps = Parameters<typeof setCliCompactionTestDeps>[0];
-type CliCompactionParams = Parameters<typeof runCliTurnCompactionLifecycle>[0];
 type CompactParams = Parameters<ContextEngine["compact"]>[0];
-
-const defaultSettingsManager = async () => ({
-  getCompactionReserveTokens: () => 200,
-  getCompactionKeepRecentTokens: () => 0,
-  applyOverrides: () => {},
-});
-
-const defaultPreemptiveCompaction = () => ({
-  route: "fits" as const,
-  shouldCompact: false,
-  estimatedPromptTokens: 600,
-  promptBudgetBeforeReserve: 800,
-  overflowTokens: 0,
-  toolResultReducibleChars: 0,
-  effectiveReserveTokens: 200,
-});
 
 function createPreparedRuntimeLease(input: {
   config: OpenClawConfig;
@@ -82,89 +65,6 @@ function createPreparedRuntimeLease(input: {
       pluginRegistry: prepared.pluginRegistry,
     },
     [Symbol.asyncDispose]: vi.fn(async () => {}),
-  };
-}
-
-async function prepareCompactionScenario(params: {
-  tmpDir: string;
-  suffix: string;
-  provider?: string;
-  model?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  sessionEntry?: Partial<SessionEntry>;
-  cfg?: OpenClawConfig;
-  cwd?: string;
-  contextEngine?: (compactCalls: CompactParams[]) => ContextEngine;
-  maintenance?: CliCompactionTestDeps["runContextEngineMaintenance"];
-  recordCliCompactionInStore?: CliCompactionTestDeps["recordCliCompactionInStore"];
-  deps?: CliCompactionTestDeps;
-}) {
-  const sessionKey = params.sessionKey ?? `agent:main:${params.suffix}`;
-  const sessionId = params.sessionId ?? `session-${params.suffix}`;
-  const transcriptFile = path.join(params.tmpDir, `${params.suffix}.jsonl`);
-  const storePath = path.join(params.tmpDir, `${params.suffix}.sqlite`);
-  await writeSessionFile({ sessionFile: transcriptFile, sessionId });
-
-  const sessionEntry: SessionEntry = {
-    sessionId,
-    updatedAt: Date.now(),
-    sessionFile: transcriptFile,
-    contextTokens: 1_000,
-    totalTokens: 950,
-    totalTokensFresh: true,
-    totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-    ...params.sessionEntry,
-  };
-  const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-  await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
-
-  const compactCalls: CompactParams[] = [];
-  const contextEngine =
-    params.contextEngine?.(compactCalls) ?? buildContextEngine({ compactCalls });
-  const maintenance = vi.fn(
-    params.maintenance ?? (async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 })),
-  );
-  const recordCliCompactionInStore =
-    params.recordCliCompactionInStore ?? vi.fn(recordCliCompactionInStoreImpl);
-  setCliCompactionTestDeps({
-    resolveContextEngine: async () => contextEngine,
-    ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
-    createPreparedEmbeddedAgentSettingsManager: defaultSettingsManager,
-    shouldPreemptivelyCompactBeforePrompt: defaultPreemptiveCompaction,
-    resolveLiveToolResultMaxChars: () => 20_000,
-    runContextEngineMaintenance: maintenance,
-    recordCliCompactionInStore,
-    ...params.deps,
-  });
-
-  const runParams: CliCompactionParams = {
-    cfg: params.cfg ?? ({} as OpenClawConfig),
-    sessionId,
-    sessionKey,
-    sessionEntry,
-    sessionStore,
-    storePath,
-    sessionAgentId: "main",
-    workspaceDir: params.tmpDir,
-    cwd: params.cwd,
-    agentDir: params.tmpDir,
-    provider: params.provider ?? "claude-cli",
-    model: params.model ?? "opus",
-  };
-  return {
-    compactCalls,
-    contextEngine,
-    maintenance,
-    recordCliCompactionInStore,
-    run: (overrides: Partial<CliCompactionParams> = {}) =>
-      runCliTurnCompactionLifecycle({ ...runParams, ...overrides }, systemCompactionHost),
-    sessionEntry,
-    sessionId,
-    sessionKey,
-    sessionStore,
-    storePath,
-    transcriptFile,
   };
 }
 
@@ -204,6 +104,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-compaction-"));
     setCliCompactionTestDeps({
       resolveCliBackendConfig: () => null,
+      resolveEffectiveAgentRuntime: () => "openclaw",
       acquirePreparedModelRuntime: async (input) => createPreparedRuntimeLease(input),
     });
   });
@@ -1337,6 +1238,43 @@ describe("runCliTurnCompactionLifecycle", () => {
       expect(updatedEntry?.cliSessionBindings?.[provider]?.sessionId).toBe("native-session");
     },
   );
+
+  it("defers canonical-provider CLI turns to the selected native runtime", async () => {
+    const resolveBackend = vi.fn<typeof resolveCliBackendConfig>((id: string) =>
+      id === "claude-cli"
+        ? { id, config: { command: "synthetic-cli" }, bundleMcp: false, ownsNativeCompaction: true }
+        : null,
+    );
+    const resolveRuntime = vi.fn(() => "claude-cli");
+    const scenario = await prepareCompactionScenario({
+      suffix: "canonical-provider-native-owner",
+      tmpDir,
+      provider: "anthropic",
+      model: "synthetic-model",
+      sessionEntry: {
+        cliSessionBindings: { "claude-cli": { sessionId: "native-session" } },
+      },
+      deps: {
+        resolveEffectiveAgentRuntime: resolveRuntime,
+        resolveCliBackendConfig: resolveBackend,
+      },
+    });
+    const updated = await scenario.run();
+    expect(resolveRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        modelId: "synthetic-model",
+        sessionEntry: scenario.sessionEntry,
+      }),
+    );
+    expect(resolveBackend).toHaveBeenCalledWith("claude-cli", expect.anything(), {
+      agentId: "main",
+    });
+    expect(scenario.compactCalls).toHaveLength(0);
+    expect(scenario.recordCliCompactionInStore).not.toHaveBeenCalled();
+    expect(updated).toBe(scenario.sessionEntry);
+    expect(updated?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("native-session");
+  });
 
   it("does not skip compaction when backend does not declare ownsNativeCompaction", async () => {
     const scenario = await prepareCompactionScenario({

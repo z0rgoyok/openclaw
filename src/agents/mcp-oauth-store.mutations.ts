@@ -12,15 +12,26 @@ function beginMcpOAuthAuthorization(store: McpOAuthStore): McpOAuthStore {
 }
 
 function bindMcpOAuthTokensIssuer(store: McpOAuthStore): McpOAuthStore {
-  const issuedBy = store.discoveryState?.authorizationServerUrl;
-  if (
-    !store.tokens?.refresh_token ||
-    store.tokensAuthorizationServerUrl !== undefined ||
-    issuedBy === undefined
-  ) {
+  // Only retained provenance may bind legacy credentials, before rediscovery.
+  const issuedBy =
+    store.tokensAuthorizationServerUrl ?? store.discoveryState?.authorizationServerUrl;
+  if (issuedBy === undefined) {
     return store;
   }
-  return { ...store, tokensAuthorizationServerUrl: issuedBy };
+  return {
+    ...store,
+    ...(store.tokens
+      ? {
+          tokens: store.tokens.issuer ? store.tokens : { ...store.tokens, issuer: issuedBy },
+          ...(store.tokens.refresh_token && store.tokensAuthorizationServerUrl === undefined
+            ? { tokensAuthorizationServerUrl: store.tokens.issuer ?? issuedBy }
+            : {}),
+        }
+      : {}),
+    ...(store.clientInformation && !store.clientInformation.issuer
+      ? { clientInformation: { ...store.clientInformation, issuer: issuedBy } }
+      : {}),
+  };
 }
 
 function applyMcpOAuthAuthorizationChallenge(
@@ -78,7 +89,10 @@ export function applyMcpOAuthMutation(
       };
     case "discoveryState":
       return {
-        store: { ...beginMcpOAuthAuthorization(store), discoveryState: mutation.discoveryState },
+        store: {
+          ...beginMcpOAuthAuthorization(bindMcpOAuthTokensIssuer(store)),
+          discoveryState: mutation.discoveryState,
+        },
         applied: true,
       };
     case "authorizationRedirect":
@@ -113,7 +127,7 @@ export function applyMcpOAuthMutation(
       const next: McpOAuthStore = { ...store, tokens };
       delete next.credentialState;
       delete next.pendingAuthorizationChallenge;
-      const issuedBy = store.discoveryState?.authorizationServerUrl;
+      const issuedBy = tokens.issuer ?? store.discoveryState?.authorizationServerUrl;
       if (issuedBy === undefined) {
         delete next.tokensAuthorizationServerUrl;
       } else {

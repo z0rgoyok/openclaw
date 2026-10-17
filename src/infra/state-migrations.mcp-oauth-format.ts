@@ -87,6 +87,17 @@ export function parseLegacyMcpOAuthStore(value: unknown): Record<string, unknown
   }
   assertAllowedJsonFields(value, STORE_KEYS, "legacy MCP OAuth store", { reportField: false });
   const result: Record<string, unknown> = {};
+  // Keep the raw SDK extension fields, rejecting stamps its schema would erase.
+  for (const field of ["clientInformation", "tokens"] as const) {
+    const credential = value[field];
+    if (
+      isRecord(credential) &&
+      credential.issuer !== undefined &&
+      typeof credential.issuer !== "string"
+    ) {
+      throw new Error(`legacy MCP OAuth ${field} issuer must be a string`);
+    }
+  }
   if (value.clientInformation !== undefined) {
     const parsed = OAuthClientInformationSchema.safeParse(value.clientInformation);
     if (!parsed.success) {
