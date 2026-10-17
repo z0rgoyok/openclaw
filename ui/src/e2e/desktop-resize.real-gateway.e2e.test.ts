@@ -15,7 +15,7 @@ import {
   readDesktopProofGatewayCloses,
   readDesktopProofNodeStreamCloses,
 } from "../../../scripts/lib/desktop-resize-proof.mts";
-import { getFreePort } from "../../../src/test-utils/ports.ts";
+import { getDeterministicFreePortBlock, getFreePort } from "../../../src/test-utils/ports.ts";
 import { prepareSkillLibraryNodeProcess } from "../../../test/e2e/qa-lab/runtime/skill-library-node-process.ts";
 import { SkillLibraryWireClient } from "../../../test/e2e/qa-lab/runtime/skill-library-wire-fixture.ts";
 import {
@@ -76,7 +76,7 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   // The suite owns the authenticated proxy; the scenario owns its real Gateway.
   startServer: async () => {
-    gatewayPort = await getFreePort();
+    gatewayPort = await getDeterministicFreePortBlock({ offsets: [0, 1] });
     const proxyPort = await getFreePort();
     const proxy = await createServer({
       configFile: false,
