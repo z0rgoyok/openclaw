@@ -37,9 +37,10 @@ describe("MCP OAuth worker reads", () => {
       });
       const prefix = requesterMcpOAuthStoreKeyPrefix(operator.serverName, operator.serverUrl);
       const store: McpOAuthStore = {
-        clientInformation: { client_id: "fixture-client" },
+        clientInformation: { client_id: "fixture-client", issuer: "https://issuer.example.test" },
         tokens: {
           access_token: "fixture-access",
+          issuer: "https://issuer.example.test",
           refresh_token: "fixture-refresh",
           token_type: "Bearer",
         },

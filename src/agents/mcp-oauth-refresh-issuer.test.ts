@@ -8,8 +8,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
-import { readMcpOAuthStore } from "./mcp-oauth-store.js";
-import { withMcpOAuthProviderForTest } from "./mcp-oauth.test-support.js";
+import { clearMcpOAuthStore, readMcpOAuthStore } from "./mcp-oauth-store.js";
+import { withMcpOAuthProviderForTest, withMcpOAuthTestLease } from "./mcp-oauth.test-support.js";
 
 const SERVER_NAME = "Remote Docs";
 const SERVER_URL = "https://mcp.example.com/mcp";
@@ -103,6 +103,7 @@ function createOAuthNetwork(config: {
 async function seedAuthorizedStore(
   order: "discovery-then-tokens" | "tokens-then-discovery",
   expiresIn = 3600,
+  clientSecret?: string,
 ) {
   await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
     const discoveryState = {
@@ -115,7 +116,10 @@ async function seedAuthorizedStore(
       token_type: "Bearer",
       expires_in: expiresIn,
     };
-    await provider.saveClientInformation?.({ client_id: "stored-client-id" });
+    await provider.saveClientInformation?.({
+      client_id: "stored-client-id",
+      ...(clientSecret ? { client_secret: clientSecret } : {}),
+    });
     if (order === "discovery-then-tokens") {
       await provider.saveDiscoveryState?.(discoveryState);
       await provider.saveTokens(tokens);
@@ -357,6 +361,83 @@ describe("MCP OAuth refresh issuer binding", () => {
         expect((await readStore()).tokens).toMatchObject({ refresh_token: STORED_REFRESH });
       },
       { prefix: "openclaw-mcp-oauth-issuer-tokenonly-", ...TEMP_HOME_OPTIONS },
+    );
+  });
+
+  it("retains a legacy client secret's original issuer through a changed challenge and reload", async () => {
+    await withTempHome(
+      async () => {
+        await seedAuthorizedStore("tokens-then-discovery", 3600, "stored-client-secret");
+        const network = createOAuthNetwork({
+          challengeMetadataUrl: REPLACEMENT_METADATA_URL,
+          issuer: REPLACEMENT_ISSUER,
+          mintedAccessToken: "attacker-access",
+        });
+        await expect(
+          buildOAuthFetch(network.fetchFn)(SERVER_URL, { method: "POST", body: "{}" }),
+        ).rejects.toThrow();
+        expect(network.tokenRequests).toEqual([]);
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+        expect((await readStore()).clientInformation).toMatchObject({
+          client_secret: "stored-client-secret",
+          issuer: ORIGINAL_ISSUER,
+        });
+        expect((await readStore()).tokens).toMatchObject({ issuer: ORIGINAL_ISSUER });
+      },
+      { prefix: "openclaw-mcp-oauth-client-issuer-", ...TEMP_HOME_OPTIONS },
+    );
+  });
+
+  it("refuses to attach unknown legacy secrets to newly discovered metadata", async () => {
+    await withTempHome(
+      async () => {
+        await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
+          await provider.saveClientInformation?.({
+            client_id: "legacy-client",
+            client_secret: "unbound-client-secret",
+          });
+          await provider.saveTokens({
+            access_token: STORED_ACCESS,
+            refresh_token: STORED_REFRESH,
+            token_type: "Bearer",
+          });
+        });
+        await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
+          await expect(provider.clientInformation()).rejects.toThrow(/no trusted issuer/);
+          expect(await provider.tokens()).toBeUndefined();
+          await expect(
+            provider.saveDiscoveryState?.({
+              authorizationServerUrl: REPLACEMENT_ISSUER,
+            }),
+          ).rejects.toThrow(/no trusted issuer/);
+        });
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+        const store = await readStore();
+        expect(store.discoveryState).toBeUndefined();
+        expect(store.tokens).not.toHaveProperty("issuer");
+        expect(store.clientInformation).not.toHaveProperty("issuer");
+        // CLI logout owns this clear; an explicit logout permits a fresh login.
+        await withMcpOAuthTestLease(IDENTITY.storeKey, async (lease, context) => {
+          await clearMcpOAuthStore({ storeKey: IDENTITY.storeKey, lease, context });
+        });
+        await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
+          await provider.saveDiscoveryState?.({ authorizationServerUrl: REPLACEMENT_ISSUER });
+          await provider.saveClientInformation?.({
+            client_id: "new-client",
+            issuer: REPLACEMENT_ISSUER,
+          });
+          await provider.saveTokens({
+            access_token: "new-access",
+            refresh_token: "new-refresh",
+            token_type: "Bearer",
+            issuer: REPLACEMENT_ISSUER,
+          });
+          expect(await provider.tokens()).toMatchObject({ issuer: REPLACEMENT_ISSUER });
+        });
+      },
+      { prefix: "openclaw-mcp-oauth-client-unbound-", ...TEMP_HOME_OPTIONS },
     );
   });
 

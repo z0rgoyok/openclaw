@@ -45,7 +45,10 @@ describe("MCP OAuth requester credentials", () => {
           "alice",
         );
         await withMcpOAuthProviderForTest({ identity }, async (provider) => {
-          await provider.saveTokens({ access_token: "access", token_type: "Bearer" });
+          await provider.saveTokens({
+            access_token: "access",
+            token_type: "Bearer",
+          });
           const storeKey = identity.storeKey;
           openOpenClawStateDatabase()
             .db.prepare("UPDATE mcp_oauth_stores SET store_json = ? WHERE store_key = ?")

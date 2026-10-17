@@ -118,8 +118,13 @@ export async function createMcpOAuthClientProvider(params: {
     }
     return store;
   };
-  await readStore();
+  const initialStore = await readStore();
   params.login?.assertCurrent();
+  const hasUnboundLegacySecrets =
+    initialStore.tokensAuthorizationServerUrl === undefined &&
+    initialStore.discoveryState?.authorizationServerUrl === undefined &&
+    ((initialStore.tokens?.refresh_token && !initialStore.tokens.issuer) ||
+      (initialStore.clientInformation?.client_secret && !initialStore.clientInformation.issuer));
   const updateStore = async (
     mutation: McpOAuthMutation,
     options: { beforeCommit?: () => void; onAcknowledged?: () => void } = {},
@@ -147,6 +152,13 @@ export async function createMcpOAuthClientProvider(params: {
       throw error;
     }
   };
+  if (
+    (initialStore.tokensAuthorizationServerUrl !== undefined || initialStore.discoveryState) &&
+    ((initialStore.tokens && !initialStore.tokens.issuer) ||
+      (initialStore.clientInformation && !initialStore.clientInformation.issuer))
+  ) {
+    await updateStore({ kind: "bindTokensIssuer" });
+  }
   const preparedStore = () => {
     if ("error" in prepared) {
       throw prepared.error;
@@ -190,6 +202,16 @@ export async function createMcpOAuthClientProvider(params: {
     async clientInformation() {
       const store = await readStore();
       params.login?.assertCurrent();
+      if (
+        (store.clientInformation?.client_secret && !store.clientInformation.issuer) ||
+        (store.clientInformation?.issuer &&
+          store.discoveryState?.authorizationServerUrl !== undefined &&
+          store.clientInformation.issuer !== store.discoveryState.authorizationServerUrl)
+      ) {
+        throw new Error(
+          `MCP server "${params.identity.serverName}" requires OAuth authorization: no trusted issuer matches the stored client credentials. Run openclaw mcp logout "${params.identity.serverName}" and then openclaw mcp login "${params.identity.serverName}".`,
+        );
+      }
       return store.clientInformation;
     },
     async saveClientInformation(clientInformation) {
@@ -205,6 +227,9 @@ export async function createMcpOAuthClientProvider(params: {
       }
       const store = await readStore();
       params.login?.assertCurrent();
+      if (store.tokens?.refresh_token && !store.tokens.issuer) {
+        return undefined;
+      }
       const discoveredAuthorizationServerUrl = store.discoveryState?.authorizationServerUrl;
       if (!store.tokens?.refresh_token || discoveredAuthorizationServerUrl === undefined) {
         return store.tokens;
@@ -280,6 +305,11 @@ export async function createMcpOAuthClientProvider(params: {
       });
     },
     async saveDiscoveryState(discoveryState) {
+      if (hasUnboundLegacySecrets) {
+        throw new Error(
+          `MCP server "${params.identity.serverName}" requires OAuth authorization: stored credentials have no trusted issuer. Run openclaw mcp logout "${params.identity.serverName}" and then openclaw mcp login "${params.identity.serverName}".`,
+        );
+      }
       await updateStore({ kind: "discoveryState", discoveryState });
       params.login?.assertCurrent();
     },

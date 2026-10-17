@@ -22,6 +22,7 @@ it("persists SDK callbacks and pending state across close without parent SQL or 
     const identity = operatorMcpOAuthIdentity("worker-writes", "https://mcp.example.test/rpc");
     const tokens = {
       access_token: "fixture-access",
+      issuer: "https://issuer.example.test",
       refresh_token: "fixture-refresh",
       token_type: "Bearer",
       expires_in: 3600,

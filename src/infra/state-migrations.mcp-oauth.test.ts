@@ -7,6 +7,7 @@ import { root } from "@openclaw/fs-safe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
+import { parseMcpOAuthStoreJson } from "../agents/mcp-oauth-store.kernel.js";
 import { clearMcpOAuthCredentials } from "../agents/mcp-oauth.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -20,6 +21,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { parseLegacyMcpOAuthStore } from "./state-migrations.mcp-oauth-format.js";
 import { isDefinitelyStaleLegacyMcpOAuthLock } from "./state-migrations.mcp-oauth-lock-stale.js";
 import { withRootBoundedLegacyFileLock } from "./state-migrations.mcp-oauth-lock.js";
 import {
@@ -567,3 +569,21 @@ describe("legacy MCP OAuth Doctor migration", () => {
     expect(await fsp.readFile(lockPath, "utf8")).toBe(raw);
   });
 });
+
+// No database boot is needed to prove the SDK's catch(undefined) admission edge.
+it.each([null, 17, { issuer: "malformed-object" }])(
+  "rejects non-string credential issuer stamps in both store admission paths (%j)",
+  (issuer) => {
+    for (const field of ["clientInformation", "tokens"] as const) {
+      const credential =
+        field === "tokens"
+          ? { access_token: "fixture-access", token_type: "Bearer", issuer }
+          : { client_id: "fixture-client", client_secret: "fixture-secret", issuer };
+      const store = { [field]: credential };
+      expect(() => parseMcpOAuthStoreJson("fixture-key", JSON.stringify(store))).toThrow(
+        `${field} issuer must be a string`,
+      );
+      expect(() => parseLegacyMcpOAuthStore(store)).toThrow(`${field} issuer must be a string`);
+    }
+  },
+);

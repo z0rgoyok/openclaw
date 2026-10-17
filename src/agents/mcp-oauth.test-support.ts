@@ -82,3 +82,13 @@ export function resolvedOAuthConfig(identity: McpOAuthIdentity) {
     supportsParallelToolCalls: false,
   };
 }
+
+/** Persist the SDK redirect callback with deterministic synthetic PKCE state. */
+export async function persistMcpOAuthRedirectForTest(provider: OAuthClientProvider) {
+  await provider.saveCodeVerifier("verifier");
+  const authorizationUrl = new URL("https://auth.example.com/authorize");
+  authorizationUrl.searchParams.set("redirect_uri", String(provider.redirectUrl));
+  authorizationUrl.searchParams.set("state", "state-1234567890");
+  await provider.redirectToAuthorization(authorizationUrl);
+  return "REDIRECT" as const;
+}

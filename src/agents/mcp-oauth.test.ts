@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import { handleMcpOAuthCallback } from "../gateway/mcp-oauth-callback.js";
@@ -29,6 +28,7 @@ import {
 } from "./mcp-oauth.js";
 import { requesterIdentity, withTempHome } from "./mcp-oauth.test-harness.js";
 import {
+  persistMcpOAuthRedirectForTest as persistRedirect,
   resolvedOAuthConfig,
   seedMcpOAuthStoreForTest,
   withMcpOAuthProviderForTest,
@@ -58,15 +58,6 @@ async function runGatewayOAuthCallback(params: {
     },
   );
   return response;
-}
-
-async function persistRedirect(provider: OAuthClientProvider) {
-  await provider.saveCodeVerifier("verifier");
-  const authorizationUrl = new URL("https://auth.example.com/authorize");
-  authorizationUrl.searchParams.set("redirect_uri", String(provider.redirectUrl));
-  authorizationUrl.searchParams.set("state", "state-1234567890");
-  await provider.redirectToAuthorization(authorizationUrl);
-  return "REDIRECT" as const;
 }
 
 function sendOAuthJson(response: ServerResponse, body: unknown, status = 200): void {
@@ -176,6 +167,7 @@ describe("MCP OAuth provider", () => {
       async () => {
         await withMcpOAuthProviderForTest({ identity: REMOTE_IDENTITY }, async (provider) => {
           await provider.saveTokens({
+            issuer: "https://old-auth.example.com",
             access_token: "stored-access",
             refresh_token: "stored-refresh",
             token_type: "Bearer",
@@ -209,6 +201,7 @@ describe("MCP OAuth provider", () => {
           },
           async (provider) => {
             await provider.saveTokens({
+              issuer: "https://old-auth.example.com",
               access_token: "decoy-token",
               refresh_token: "test-auth-token",
               token_type: "Bearer",
@@ -304,6 +297,7 @@ describe("MCP OAuth provider", () => {
 
         authMock.mockImplementationOnce(async (loginProvider) => {
           await loginProvider.saveTokens({
+            issuer: "https://old-auth.example.com",
             access_token: "gateway-token",
             refresh_token: "secret-token",
             token_type: "Bearer",
@@ -334,6 +328,7 @@ describe("MCP OAuth provider", () => {
       async () => {
         await withMcpOAuthProviderForTest({ identity: REMOTE_IDENTITY }, async (provider) => {
           await provider.saveTokens({
+            issuer: "https://old-auth.example.com",
             access_token: "replacement-token",
             refresh_token: "replacement-refresh",
             token_type: "Bearer",
@@ -363,6 +358,7 @@ describe("MCP OAuth provider", () => {
           { identity: REMOTE_IDENTITY },
           async (provider) =>
             await provider.saveTokens({
+              issuer: "https://old-auth.example.com",
               access_token: "newer-token",
               refresh_token: "newer-refresh",
               token_type: "Bearer",
@@ -399,6 +395,7 @@ describe("MCP OAuth provider", () => {
           },
           async (provider) => {
             await provider.saveTokens({
+              issuer: "https://old-auth.example.com",
               access_token: "decoy-token",
               refresh_token: "test-auth-token",
               token_type: "Bearer",
@@ -459,6 +456,7 @@ describe("MCP OAuth provider", () => {
         );
         await withMcpOAuthProviderForTest({ identity: REMOTE_IDENTITY }, async (provider) => {
           await provider.saveTokens({
+            issuer: "https://old-auth.example.com",
             access_token: "legacy-access",
             refresh_token: "legacy-refresh",
             token_type: "Bearer",
@@ -476,6 +474,7 @@ describe("MCP OAuth provider", () => {
         authMock.mockImplementationOnce(async (refreshProvider, options) => {
           expect(options).toMatchObject({ resourceMetadataUrl, scope: "docs.read" });
           await refreshProvider.saveTokens({
+            issuer: "https://old-auth.example.com",
             access_token: "gateway-token",
             refresh_token: "secret-token",
             token_type: "Bearer",
@@ -506,6 +505,7 @@ describe("MCP OAuth provider", () => {
           },
           async (provider) => {
             await provider.saveTokens({
+              issuer: "https://old-auth.example.com",
               access_token: "example",
               refresh_token: "test-auth-token",
               token_type: "Bearer",
@@ -528,6 +528,7 @@ describe("MCP OAuth provider", () => {
 
         authMock.mockImplementationOnce(async (refreshProvider) => {
           await refreshProvider.saveTokens({
+            issuer: "https://old-auth.example.com",
             access_token: "gateway-token",
             refresh_token: "secret-token",
             token_type: "Bearer",
@@ -729,6 +730,7 @@ describe("MCP OAuth provider", () => {
           async (provider) => {
             await provider.saveClientInformation?.({ client_id: "client-id" });
             await provider.saveTokens({
+              issuer: "https://old-auth.example.com",
               access_token: "access",
               refresh_token: "refresh",
               token_type: "Bearer",

@@ -122,6 +122,17 @@ export function parseMcpOAuthStoreJson(storeKey: string, raw: string): McpOAuthS
   if (!isRecord(value)) {
     throw new McpOAuthStoreCorruptionError(storeKey, "store_json must contain an object");
   }
+  // SDK schemas tolerate malformed stamps; raw persisted credentials must not.
+  for (const field of ["clientInformation", "tokens"] as const) {
+    const credential = value[field];
+    if (
+      isRecord(credential) &&
+      credential.issuer !== undefined &&
+      typeof credential.issuer !== "string"
+    ) {
+      throw new McpOAuthStoreCorruptionError(storeKey, `${field} issuer must be a string`);
+    }
+  }
   if (
     value.clientInformation !== undefined &&
     !OAuthClientInformationSchema.safeParse(value.clientInformation).success
