@@ -52,6 +52,7 @@ import { ensureSelectedAgentHarnessPlugin as ensureSelectedAgentHarnessPluginImp
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { SessionManager } from "../sessions/session-manager.js";
+import { resolveEffectiveAgentRuntime as resolveEffectiveAgentRuntimeImpl } from "../thinking-runtime.js";
 import {
   buildCliCompactionRuntimeContext,
   type CliCompactionContext,
@@ -98,6 +99,7 @@ type CliCompactionDeps = {
   maybeCompactAgentHarnessSession: typeof maybeCompactAgentHarnessSessionImpl;
   clearCliSessionInStore: typeof clearCliSessionInStoreImpl;
   resolveCliBackendConfig: typeof resolveCliBackendConfigImpl;
+  resolveEffectiveAgentRuntime: typeof resolveEffectiveAgentRuntimeImpl;
   recordCliCompactionInStore: typeof recordCliCompactionInStoreImpl;
 };
 
@@ -131,6 +133,7 @@ const defaultCliCompactionDeps: CliCompactionDeps = {
   maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionImpl,
   clearCliSessionInStore: clearCliSessionInStoreImpl,
   resolveCliBackendConfig: resolveCliBackendConfigImpl,
+  resolveEffectiveAgentRuntime: resolveEffectiveAgentRuntimeImpl,
   recordCliCompactionInStore: recordCliCompactionInStoreImpl,
 };
 
@@ -552,7 +555,17 @@ export async function runCliTurnCompactionLifecycle(
       return params.sessionEntry;
     }
 
-    const resolvedBackend = cliCompactionDeps.resolveCliBackendConfig(params.provider, params.cfg);
+    const runtime = cliCompactionDeps.resolveEffectiveAgentRuntime({
+      cfg: params.cfg,
+      provider: params.provider,
+      modelId: params.model,
+      agentId: params.sessionAgentId,
+      sessionEntry: params.sessionEntry,
+    });
+    const backendOptions = { agentId: params.sessionAgentId };
+    const resolvedBackend =
+      cliCompactionDeps.resolveCliBackendConfig(runtime, params.cfg, backendOptions) ??
+      cliCompactionDeps.resolveCliBackendConfig(params.provider, params.cfg, backendOptions);
     const lockedHarnessRuntime = normalizeOptionalAgentRuntimeId(
       params.sessionEntry?.agentHarnessId,
     );

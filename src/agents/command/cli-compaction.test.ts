@@ -204,6 +204,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-compaction-"));
     setCliCompactionTestDeps({
       resolveCliBackendConfig: () => null,
+      resolveEffectiveAgentRuntime: () => "openclaw",
       acquirePreparedModelRuntime: async (input) => createPreparedRuntimeLease(input),
     });
   });
@@ -1337,6 +1338,43 @@ describe("runCliTurnCompactionLifecycle", () => {
       expect(updatedEntry?.cliSessionBindings?.[provider]?.sessionId).toBe("native-session");
     },
   );
+
+  it("defers canonical-provider CLI turns to the selected native runtime", async () => {
+    const resolveBackend = vi.fn<typeof resolveCliBackendConfig>((id: string) =>
+      id === "claude-cli"
+        ? { id, config: { command: "synthetic-cli" }, bundleMcp: false, ownsNativeCompaction: true }
+        : null,
+    );
+    const resolveRuntime = vi.fn(() => "claude-cli");
+    const scenario = await prepareCompactionScenario({
+      suffix: "canonical-provider-native-owner",
+      tmpDir,
+      provider: "anthropic",
+      model: "synthetic-model",
+      sessionEntry: {
+        cliSessionBindings: { "claude-cli": { sessionId: "native-session" } },
+      },
+      deps: {
+        resolveEffectiveAgentRuntime: resolveRuntime,
+        resolveCliBackendConfig: resolveBackend,
+      },
+    });
+    const updated = await scenario.run();
+    expect(resolveRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        modelId: "synthetic-model",
+        sessionEntry: scenario.sessionEntry,
+      }),
+    );
+    expect(resolveBackend).toHaveBeenCalledWith("claude-cli", expect.anything(), {
+      agentId: "main",
+    });
+    expect(scenario.compactCalls).toHaveLength(0);
+    expect(scenario.recordCliCompactionInStore).not.toHaveBeenCalled();
+    expect(updated).toBe(scenario.sessionEntry);
+    expect(updated?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("native-session");
+  });
 
   it("does not skip compaction when backend does not declare ownsNativeCompaction", async () => {
     const scenario = await prepareCompactionScenario({
