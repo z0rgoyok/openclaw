@@ -5,14 +5,19 @@ on:
     inputs:
       tag:
         description: Intended immutable stable, extended-stable, or beta release tag
-        required: true
+        required: false
         type: string
       release_sha:
         description: Final immutable Release SHA, including its changelog
-        required: true
+        required: false
         type: string
       image_tag_suffix:
         description: Optional dated rebuild suffix for version-identified image tags
+        required: false
+        default: ""
+        type: string
+      deploy_os_build_spec:
+        description: Base64 JSON immutable core build specification from Deploy OS
         required: false
         default: ""
         type: string
@@ -55,6 +60,7 @@ env:
 
 jobs:
   resolve:
+    if: ${{ inputs.deploy_os_build_spec == '' }}
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     outputs:
       version: ${{ steps.identity.outputs.version }}
@@ -336,4 +342,48 @@ jobs:
         with:
           name: ${{ needs.resolve.outputs.artifact_name }}
           path: ${{ runner.temp }}/docker-release/manifest.json
+          if-no-files-found: error
+
+  managed-core-build:
+    if: ${{ contains(fromJSON('["z0rgoyok/openclaw","neiro-network/openclaw"]'), github.repository) && github.event_name == 'workflow_dispatch' && inputs.deploy_os_build_spec != '' }}
+    permissions:
+      contents: read
+      pull-requests: read
+    concurrency:
+      group: deploy-os-core-build
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out build transport
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: transport
+          persist-credentials: false
+      - name: Validate build specification and merged source
+        id: specification
+        env:
+          DEPLOY_OS_BUILD_SPEC: ${{ inputs.deploy_os_build_spec }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 transport/scripts/deploy-os-core-build.py prepare
+      - name: Check out exact managed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: z0rgoyok/openclaw
+          ref: ${{ steps.specification.outputs.source_commit }}
+          path: core-source
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Build bounded immutable exports
+        env:
+          DEPLOY_OS_BUILD_SPEC: ${{ inputs.deploy_os_build_spec }}
+        run: python3 transport/scripts/deploy-os-core-build.py build --source core-source --output core-artifact
+      - name: Upload immutable build transport
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ${{ steps.specification.outputs.artifact_name }}
+          path: core-artifact/
+          retention-days: 7
+          compression-level: 0
           if-no-files-found: error
