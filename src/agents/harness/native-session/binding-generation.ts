@@ -196,6 +196,7 @@ function readBindingSessionEntry(params: {
         storePath:
           params.storePath?.trim() ||
           resolveSessionStorePathCore(params.config?.session?.store, { agentId: target.agentId }),
+        projection: "list",
         hydrateSkillPromptRefs: false,
         readConsistency: "latest",
       })
