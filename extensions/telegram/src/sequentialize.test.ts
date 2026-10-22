@@ -119,7 +119,7 @@ describe("Telegram sequential middleware", () => {
     });
     const error = new Error("claim adoption stalled");
     let rejection: unknown;
-    const rejected = expired.catch((caught) => {
+    const rejected = expired.catch((caught: unknown) => {
       rejection = caught;
     });
     owner.abort(error);

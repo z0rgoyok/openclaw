@@ -15,7 +15,10 @@ export function createTelegramSequentializer() {
     let onAbort: (() => void) | undefined;
     const cancelled = signal
       ? new Promise<never>((_, reject) => {
-          onAbort = () => reject(signal.reason);
+          onAbort = () =>
+            reject(
+              signal.reason instanceof Error ? signal.reason : new Error("Telegram replay aborted"),
+            );
           signal.addEventListener("abort", onAbort, { once: true });
         })
       : undefined;
