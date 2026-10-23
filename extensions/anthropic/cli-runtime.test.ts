@@ -119,6 +119,74 @@ function resultDetail(records: Record<string, unknown>[]): Record<string, unknow
 }
 
 describe("Claude native stdio boundary", () => {
+  it("delivers two active corrections through one process and holds an earlier result", async () => {
+    let sink:
+      | Parameters<NonNullable<CliBackendExecuteContext["registerMessageInjection"]>>[0]
+      | undefined;
+    const unregister = vi.fn();
+    const liveSession = createLiveSession();
+    const context = await createContext("steering", {
+      liveSession,
+      registerMessageInjection: (value) => {
+        sink = value;
+        return unregister;
+      },
+    });
+    const records: Record<string, unknown>[] = [];
+    const completed = (async () => {
+      for await (const record of executeClaudeCli(context)) {
+        records.push(record);
+        if (record.subtype === "fixture_steering_ready") {
+          expect(sink).toBeDefined();
+          await Promise.all(
+            ["first correction", "second correction"].map((text) =>
+              sink!({
+                text,
+                assertCurrent() {},
+                onDispatched() {},
+              }),
+            ),
+          );
+        }
+      }
+    })();
+    await completed;
+    expect(records.filter((record) => record.type === "result")).toEqual([
+      expect.objectContaining({ result: "previous answer", openclaw_interim_result: true }),
+      expect.objectContaining({ result: "both corrections applied" }),
+    ]);
+    expect(unregister).toHaveBeenCalled();
+    await expect(
+      sink!({ text: "late correction", assertCurrent() {}, onDispatched() {} }),
+    ).rejects.toThrow();
+    expect(await readFile(path.join(context.cwd, "user.received"), "utf8")).toBe(
+      "second correction",
+    );
+  });
+
+  it("settles a dispatched correction without a receipt when cancelled", async () => {
+    const abort = new AbortController();
+    let sink:
+      | Parameters<NonNullable<CliBackendExecuteContext["registerMessageInjection"]>>[0]
+      | undefined;
+    const context = await createContext("steering-no-receipt", {
+      abortSignal: abort.signal,
+      registerMessageInjection: (value) => {
+        sink = value;
+        return () => {};
+      },
+    });
+    const iterator = executeClaudeCli(context)[Symbol.asyncIterator]();
+    while ((await iterator.next()).value?.subtype !== "fixture_steering_ready") {}
+    const dispatched = vi.fn();
+    const pending = sink!({ text: "correction", assertCurrent() {}, onDispatched: dispatched });
+    const rejected = expect(pending).rejects.toThrow();
+    abort.abort();
+    await rejected;
+    expect(dispatched).toHaveBeenCalledOnce();
+    await expect(iterator.next()).rejects.toThrow();
+  });
+
   it.each([
     { scenario: "shutdown-ignore", name: "native parent and child ignore EOF and SIGTERM" },
     { scenario: "shutdown-eof", name: "native parent exits immediately on EOF" },

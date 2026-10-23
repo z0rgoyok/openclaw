@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { clearSessionQueues, type FollowupRun } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
@@ -12,6 +13,74 @@ import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("consumes hook-blocked steering without followup replay or aborting its target", async () => {
+  const key = "agent:main:blocked-native-steer";
+  const run = createQueueTestRun({
+    prompt: "suppressed clarification",
+    messageId: "blocked-steer",
+  });
+  run.run.sessionKey = key;
+  run.run.agentId = "main";
+  const recorder = createUserTurnTranscriptRecorder({
+    input: { text: run.prompt },
+    target: () => undefined,
+  });
+  run.userTurnTranscriptRecorder = recorder;
+  const operation = createReplyOperation({
+    sessionKey: key,
+    sessionId: run.run.sessionId,
+    resetTriggered: false,
+  });
+  operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+  operation.setPhase("running");
+  const cancel = vi.fn();
+  const followup = vi.fn(async () => {});
+  operation.attachBackend({
+    kind: "cli",
+    runId: "original-native-turn",
+    toolAuthorityFingerprint: operation.toolAuthorityFingerprint,
+    cancel,
+    messageInjectionV2: {
+      version: 2,
+      isAvailable: () => true,
+      queueMessage: async () => {
+        // The producer records a terminal write-hook decision before reporting rejection.
+        recorder.markBlocked();
+        throw new Error("Canonical input suppressed by its write hook.");
+      },
+    },
+  });
+  const typing = createMockTypingController();
+  try {
+    await expect(
+      runActiveReplySteer({
+        followupRun: run,
+        opts: undefined,
+        providedReplyOperation: operation,
+        queueKey: key,
+        releaseAdmissionTicket: () => {},
+        replyOperationRunState: {},
+        resolvedQueue: { mode: "steer", debounceMs: 0 },
+        restartRecoverySourceTurnId: run.messageId,
+        runFollowup: followup,
+        sessionCtx: {},
+        sessionKey: key,
+        touchActiveSessionEntry: async () => {},
+        typing,
+        typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+        toolAuthorityFingerprint: operation.toolAuthorityFingerprint!,
+      }),
+    ).resolves.toBe("handled");
+    expect(getExistingFollowupQueue(key)?.items ?? []).toEqual([]);
+    expect(operation.result).toBeNull();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(followup).not.toHaveBeenCalled();
+  } finally {
+    clearSessionQueues([key]);
+    operation.complete();
+  }
+});
 
 it.each(
   (["ready", "starting"] as const).flatMap((phase) =>

@@ -18,6 +18,7 @@ let user;
 let privateContext;
 let lateDecision;
 let pendingInputUuid;
+const steeringInputs = [];
 const priorResponses = {};
 let credentialProof;
 let shutdownDescendant;
@@ -84,6 +85,24 @@ for await (const line of createInterface({ input: process.stdin })) {
     turn++;
     user = message.message.content;
     writeFileSync("user.received", user);
+    if (scenario === "steering" || scenario === "steering-no-receipt") {
+      steeringInputs.push(message.uuid);
+      if (turn === 1) {
+        send({ type: "system", subtype: "init", capabilities: ["msg_lifecycle_v1"] });
+        send({ type: "command_lifecycle", state: "started", command_uuid: "native-command-id" });
+        send({ ...message, isReplay: true });
+        send({ type: "system", subtype: "fixture_steering_ready" });
+      } else if (scenario === "steering") {
+        send({ ...message, isReplay: true });
+        if (turn === 2) {
+          send({ type: "result", subtype: "success", result: "previous answer", user_message_uuids: [steeringInputs[0]] });
+        }
+        if (turn === 3) {
+          send({ type: "result", subtype: "success", result: "both corrections applied", user_message_uuids: steeringInputs });
+        }
+      }
+      continue;
+    }
     if (scenario === "credential-tree") {
       send({ type: "system", subtype: "fixture_credential", pid: process.pid, ...credentialProof });
       continue;

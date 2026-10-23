@@ -269,6 +269,11 @@ export async function runActiveReplySteer(
       shouldAbortOnAdoptionError: isIngressAdoptionLostError,
     });
     if (finalization.status === "rejected") {
+      if (followupRun.userTurnTranscriptRecorder?.isBlocked()) {
+        parked.consume();
+        typing.cleanup();
+        return "handled";
+      }
       return await fallback(finalization.outcome.reason);
     }
     // Accepted or indeterminate input cannot be abandoned for replay, even

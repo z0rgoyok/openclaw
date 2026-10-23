@@ -302,6 +302,31 @@ The host rejects restart when the caller is revoked or an exact live generation
 must be preserved. `register()` remains a synchronous admission check and refuses
 replacement while cleanup is unresolved.
 
+### Active text input
+
+A bidirectional transport can opt into active text steering through the optional
+`execute` context capability `registerMessageInjection(sink)`. Register only once
+the original prompt has been dispatched. Keep the returned unregister callback
+with that exact turn and call it on completion, cancellation, or transport failure.
+Backends without a registered sink keep their existing queued-input behavior.
+
+The sink receives `{ text, assertCurrent, onDispatched }`. The host serializes
+canonical transcript admission before calling the sink. After any awaited work,
+call `assertCurrent()` immediately before writing the input, and call
+`onDispatched()` at that write boundary. Resolve the sink promise only after the
+native runtime acknowledges that exact input. Reject on lost receipt or process
+closure; the host retains dispatched input as uncertain and prevents automatic
+replay. Retained callbacks cannot send into a completed or replacement turn.
+This capability currently admits text only; images retain normal queued delivery.
+
+Claude's stdio transport uses replayed user-message UUIDs for consumption receipts.
+Lifecycle records also have their own event UUID; correlate inputs through the
+command UUID field or replayed user UUID. A replay receipt does not
+finish the task: successful results must cover pending corrections through
+`user_message_uuid` or `user_message_uuids` before the admitted turn can close.
+An earlier result remains interim while a correction's response is outstanding.
+This protocol was qualified with Claude Code 2.1.295.
+
 `runtimeArtifact` is plugin-owned. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;
 normal CLI runs do not require it. A backend without this declaration cannot
