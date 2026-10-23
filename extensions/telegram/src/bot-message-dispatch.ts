@@ -398,6 +398,7 @@ export const dispatchTelegramMessage = async (
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
     } finally {
       // Stop producers before draining drafts, finalizing accepted text, and cleaning previews.
+      turn.disposeProgressObserver();
       turn.progressCompositor.cancel();
       await turn.draftEventQueue;
       try {
@@ -412,6 +413,7 @@ export const dispatchTelegramMessage = async (
       await cleanupDrafts(turn, isDispatchSuperseded());
     }
   } finally {
+    turn.disposeProgressObserver();
     dispatchWasSuperseded = isDispatchSuperseded();
   }
 
