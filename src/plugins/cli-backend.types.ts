@@ -237,6 +237,18 @@ export type CliBackendPromptContext = {
   appendContext?: string;
 };
 
+/** One text input dispatched into the exact admitted native turn. */
+export type CliBackendMessageInjectionInput = {
+  text: string;
+  /** Invoke synchronously immediately before writing native input. */
+  assertCurrent: () => void;
+  /** Invoke at the write boundary, once input can no longer safely be replayed. */
+  onDispatched: () => void;
+};
+
+/** Resolves only after the native runtime acknowledges this exact input. */
+export type CliBackendMessageInjection = (input: CliBackendMessageInjectionInput) => Promise<void>;
+
 /** Exact prepared local process facts consumed by a plugin-owned execution transport. */
 export type CliBackendExecuteContext = {
   command: string;
@@ -259,6 +271,8 @@ export type CliBackendExecuteContext = {
   toolAvailability?: CliBackendToolAvailability;
   /** Exact host-owned reusable process lifecycle and current-turn admission. */
   liveSession?: CliBackendLiveSessionCapability;
+  /** Registers this turn's native text-input sink; retained registrations expire with the turn. */
+  registerMessageInjection?: (sink: CliBackendMessageInjection) => () => void;
   /** Closure-bound approval capability; retained copies fail after the run closes. */
   requestToolPermission: (
     request: CliBackendToolPermissionRequest,

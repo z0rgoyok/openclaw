@@ -44,6 +44,7 @@ import { createCliPluginWatchdog, type CliWatchdogClock } from "./execute-plugin
 import { attachCliReplyBackend, createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError as failover } from "./exit-error.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
+import { createCliPluginMessageInjection } from "./plugin-message-injection.js";
 import { normalizeCliToolName } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -535,10 +536,23 @@ export async function executePluginOwnedProcess(params: {
     reportOutstandingWork(),
   );
 
-  const detachReplyBackend = attachCliReplyBackend(run, () => {
-    termination.reason = "manual-cancel";
-    controller.abort(createCliAbortError());
+  const messageInjection = createCliPluginMessageInjection({
+    assertCurrent,
+    abortSignal: signal,
+    sessionId: run.sessionId,
+    cwd,
+    onDispatched: () => {
+      outstanding.replayUnsafe = true;
+    },
   });
+  const detachReplyBackend = attachCliReplyBackend(
+    run,
+    () => {
+      termination.reason = "manual-cancel";
+      controller.abort(createCliAbortError());
+    },
+    messageInjection.messageInjectionV2,
+  );
 
   let iterator: AsyncIterator<Record<string, unknown>> | undefined;
   let liveSession: ReturnType<typeof createCliLiveSessionCapability> | undefined;
@@ -592,6 +606,7 @@ export async function executePluginOwnedProcess(params: {
       ...(run.executionMode ? { executionMode: run.executionMode } : {}),
       ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
       ...(liveSession ? { liveSession } : {}),
+      registerMessageInjection: AsyncLocalStorage.bind(messageInjection.registerMessageInjection),
       // Warm transports retain their first turn's async context across plugin refreshes.
       requestToolPermission: AsyncLocalStorage.bind(
         createPluginToolPermissionHandler({
@@ -687,6 +702,7 @@ export async function executePluginOwnedProcess(params: {
       controller.abort(new Error("CLI plugin runtime turn is no longer active."));
     }
     detachReplyBackend?.();
+    messageInjection.close();
     await closePluginIterator(iterator);
   }
 
