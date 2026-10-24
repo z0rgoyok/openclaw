@@ -164,6 +164,42 @@ describe("Claude native stdio boundary", () => {
     );
   });
 
+  it("receives one correction while a tool is pending and waits for its covered result", async () => {
+    let sink:
+      | Parameters<NonNullable<CliBackendExecuteContext["registerMessageInjection"]>>[0]
+      | undefined;
+    const dispatched = vi.fn();
+    const context = await createContext("steering-tool-running", {
+      liveSession: createLiveSession(),
+      registerMessageInjection: (value) => {
+        sink = value;
+        return () => {};
+      },
+    });
+    const records: Record<string, unknown>[] = [];
+    for await (const record of executeClaudeCli(context)) {
+      records.push(record);
+      if (record.subtype === "fixture_tool_running") {
+        expect(sink).toBeDefined();
+        await sink!({ text: "active correction", assertCurrent() {}, onDispatched: dispatched });
+        // Native receipt settles injection before the transport delivers tool completion.
+        expect(records.some((item) => item.type === "result")).toBe(false);
+      }
+    }
+    expect(dispatched).toHaveBeenCalledOnce();
+    const receipts = records.filter((record) => record.type === "user" && record.isReplay === true);
+    expect(receipts).toHaveLength(2);
+    expect(receipts[1]?.message).toMatchObject({ content: "active correction" });
+    const toolResultIndex = records.findIndex(
+      (record) => record.type === "user" && !record.isReplay,
+    );
+    expect(records.indexOf(receipts[1]!)).toBeLessThan(toolResultIndex);
+    expect(records.filter((record) => record.type === "result")).toEqual([
+      expect.objectContaining({ result: "old answer", openclaw_interim_result: true }),
+      expect.objectContaining({ result: "correction applied after tool" }),
+    ]);
+  });
+
   it("settles a dispatched correction without a receipt when cancelled", async () => {
     const abort = new AbortController();
     let sink:

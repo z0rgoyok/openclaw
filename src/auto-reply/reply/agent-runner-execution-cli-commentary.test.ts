@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
+import { createChannelProgressDraftCompositor } from "../../channels/progress-draft-compositor.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -29,28 +30,37 @@ process.stdin.on("end", () => {
   const events = [
     { type: "init", session_id: "scripted-commentary" },
     {
-      type: "stream_event",
-      event: {
-        type: "content_block_delta",
-        delta: { type: "text_delta", text: "The subprocess findings are durable." },
+      type: "assistant",
+      message: {
+        id: "scripted-before-tool",
+        stop_reason: "tool_use",
+        content: [{ type: "thinking", thinking: "Private reasoning stays private." }],
       },
     },
     {
-      type: "stream_event",
-      event: {
-        type: "content_block_start",
-        index: 1,
-        content_block: { type: "tool_use", id: "tool-scripted", name: "Read", input: {} },
+      type: "assistant",
+      message: {
+        id: "scripted-before-tool",
+        stop_reason: "tool_use",
+        content: [{ type: "text", text: "The subprocess findings are durable." }],
       },
     },
     {
-      type: "stream_event",
-      event: {
-        type: "content_block_delta",
-        delta: { type: "text_delta", text: "Subprocess final answer." },
+      type: "assistant",
+      message: {
+        id: "scripted-before-tool",
+        stop_reason: "tool_use",
+        content: [{ type: "tool_use", id: "tool-scripted", name: "Read", input: {} }],
       },
     },
-    { type: "stream_event", event: { type: "message_stop" } },
+    {
+      type: "assistant",
+      message: {
+        id: "scripted-final",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "Subprocess final answer." }],
+      },
+    },
     { type: "result", session_id: "scripted-commentary", result: "Subprocess final answer." },
   ];
   process.stdout.write(events.map((event) => JSON.stringify(event)).join("\n") + "\n");
@@ -128,47 +138,98 @@ function createTurnParams(opts: GetReplyOptions, blockStreamingEnabled: boolean)
 }
 
 describe("executeAgentTurn: CLI durable commentary", () => {
-  it("delivers commentary from a real JSONL CLI subprocess", async () => {
-    useClaudeCliFallback();
-    state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
-      return await (
-        await loadActualRunCliAgentForTest()
-      )(params);
-    });
-    state.createBlockReplyDeliveryHandlerMock.mockImplementationOnce(
-      (params: { onBlockReply: NonNullable<GetReplyOptions["onBlockReply"]> }) =>
-        params.onBlockReply,
-    );
-    const onBlockReply = vi.fn<NonNullable<GetReplyOptions["onBlockReply"]>>(async () => undefined);
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createTurnParams({ onBlockReply }, true));
+  it.each(["durable", "progress"] as const)(
+    "delivers commentary from a real JSONL CLI subprocess to %s",
+    async (destination) => {
+      useClaudeCliFallback();
+      state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
+        return await (
+          await loadActualRunCliAgentForTest()
+        )(params);
+      });
+      state.createBlockReplyDeliveryHandlerMock.mockImplementationOnce(
+        (params: { onBlockReply: NonNullable<GetReplyOptions["onBlockReply"]> }) =>
+          params.onBlockReply,
+      );
+      const onBlockReply = vi.fn<NonNullable<GetReplyOptions["onBlockReply"]>>(
+        async () => undefined,
+      );
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const progress = createChannelProgressDraftCompositor({
+        active: true,
+        mode: "progress",
+        seed: "cli-commentary",
+        preparedItems: true,
+        entry: {
+          streaming: { mode: "progress", progress: { commentary: true, toolProgress: true } },
+        },
+        update: () => true,
+      });
+      const onItemEvent = vi.fn(async (payload: Parameters<typeof progress.pushItemEvent>[0]) => {
+        await progress.pushItemEvent(payload);
+      });
+      let result: Awaited<ReturnType<typeof executeAgentTurn>>;
+      try {
+        result = await executeAgentTurn(
+          createTurnParams(
+            destination === "durable"
+              ? { onBlockReply }
+              : {
+                  onItemEvent,
+                  commentaryProgressEnabled: true,
+                  progressPreambleEnabled: true,
+                },
+            destination === "durable",
+          ),
+        );
+        if (destination === "progress") {
+          expect(progress.getText()).toContain("The subprocess findings are durable.");
+          expect(progress.getText()).not.toContain("Private reasoning");
+          expect(progress.getText()).not.toContain("Subprocess final answer.");
+        }
+      } finally {
+        progress.cancel();
+      }
 
-    expect(state.runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({ emitCommentaryText: true });
-    const resolveContextEngineHost = state.runEmbeddedAgentEntryMock.mock.calls[0]?.[0]?.harness
-      ?.resolveContextEngineHost as
-      | ((
-          provider: string,
-          model: string,
-        ) => {
-          id: string;
-          label: string;
-          capabilities: readonly string[];
-        })
-      | undefined;
-    expect(resolveContextEngineHost?.("claude-cli", "claude-opus-4-6")).toEqual({
-      id: "cli:claude-cli",
-      label: 'CLI backend "claude-cli"',
-      capabilities: ["thread-bootstrap-projection"],
-    });
-    expect(result.kind).toBe("success");
-    if (result.kind === "success") {
-      expect(result.runResult.payloads).toEqual([{ text: "Subprocess final answer." }]);
-    }
-    expect(onBlockReply).toHaveBeenCalledOnce();
-    expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({
-      text: "The subprocess findings are durable.",
-    });
-  });
+      expect(state.runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({ emitCommentaryText: true });
+      const resolveContextEngineHost = state.runEmbeddedAgentEntryMock.mock.calls[0]?.[0]?.harness
+        ?.resolveContextEngineHost as
+        | ((
+            provider: string,
+            model: string,
+          ) => {
+            id: string;
+            label: string;
+            capabilities: readonly string[];
+          })
+        | undefined;
+      expect(resolveContextEngineHost?.("claude-cli", "claude-opus-4-6")).toEqual({
+        id: "cli:claude-cli",
+        label: 'CLI backend "claude-cli"',
+        capabilities: ["thread-bootstrap-projection"],
+      });
+      expect(result.kind).toBe("success");
+      if (result.kind === "success") {
+        expect(result.runResult.payloads.filter((payload) => !payload.isReasoning)).toEqual([
+          { text: "Subprocess final answer." },
+        ]);
+      }
+      if (destination === "durable") {
+        expect(onBlockReply).toHaveBeenCalledOnce();
+        expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({
+          text: "The subprocess findings are durable.",
+        });
+      } else {
+        expect(onBlockReply).not.toHaveBeenCalled();
+        expect(onItemEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            kind: "preamble",
+            progressText: "The subprocess findings are durable.",
+          }),
+        );
+      }
+    },
+  );
 
   it.each([
     {
