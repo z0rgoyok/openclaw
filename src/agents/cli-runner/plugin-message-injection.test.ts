@@ -13,13 +13,16 @@ import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import type { CliBackendMessageInjectionInput } from "../../plugins/cli-backend.types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import type { FailoverError } from "../failover-error.js";
+import { createCliEventHandlers } from "./execute-events.js";
 import {
   closePluginTestAdmissions,
   createExecution,
   runPlugin,
   SUCCESS_RESULT,
 } from "./execute-plugin.test-support.js";
+import { createCliToolTracking } from "./execute-tool-tracking.js";
 import { createCliPluginMessageInjection } from "./plugin-message-injection.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -33,7 +36,7 @@ afterEach(() => {
   }
 });
 
-async function createHost(assertCurrent = () => {}) {
+async function createHost(assertCurrent = () => {}, activeToolCount = () => 0) {
   const target = await createTarget();
   const controller = new AbortController();
   const host = createCliPluginMessageInjection({
@@ -41,6 +44,7 @@ async function createHost(assertCurrent = () => {}) {
     abortSignal: controller.signal,
     sessionId: "steer-session",
     cwd: "/tmp",
+    activeToolCount,
   });
   owners.push(host);
   const queue: typeof host.messageInjectionV2.queueMessage = (
@@ -330,6 +334,148 @@ describe("CLI native steering admission", () => {
     }
   });
 
+  it.each(["receipt", "caller cancellation", "overall timeout"])(
+    "keeps long-tool corrections owned until %s",
+    async (completion) => {
+      const target = await createTarget();
+      const recorders = ["first", "second"].map((text) =>
+        createUserTurnTranscriptRecorder({ input: { text }, target }),
+      );
+      await Promise.all(recorders.map((recorder) => recorder.persistApproved()));
+      const caller = new AbortController();
+      const { context } = await createExecution({
+        timeoutMs: completion === "overall timeout" ? 130_001 : 600_000,
+        abortSignal: caller.signal,
+      });
+      const operation = createReplyOperation({
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        resetTriggered: false,
+      });
+      context.params.replyOperation = operation;
+      context.params.sessionId = target.sessionId;
+      const events = createCliEventHandlers({
+        context,
+        toolTracking: createCliToolTracking(context),
+        getRunState: () => ({ failed: false, error: undefined }),
+      });
+      const parser = createCliJsonlStreamingParser({
+        backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+        providerId: "claude-cli",
+        onAssistantDelta: () => {},
+        onToolUseStart: events.emitParsedToolUseStart,
+        onToolResult: events.emitParsedToolResult,
+      });
+      const toolStarted = createDeferred();
+      const endTool = createDeferred();
+      const toolEnded = createDeferred();
+      const finish = createDeferred();
+      const receipts = [createDeferred(), createDeferred()];
+      const dispatched = [createDeferred(), createDeferred()];
+      const sent: string[] = [];
+      let executionSignal: AbortSignal | undefined;
+      vi.useFakeTimers();
+      const processRun = runPlugin(
+        context,
+        async function* (execution) {
+          executionSignal = execution.abortSignal;
+          execution.registerMessageInjection?.(async (input) => {
+            input.assertCurrent();
+            input.onDispatched();
+            const index = sent.push(input.text) - 1;
+            dispatched[index].resolve();
+            await receipts[index].promise;
+            input.assertCurrent();
+          });
+          yield {
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: [{ type: "tool_use", id: "long-bash", name: "Bash", input: {} }],
+            },
+          };
+          toolStarted.resolve();
+          await endTool.promise;
+          yield {
+            type: "user",
+            message: {
+              role: "user",
+              content: [{ type: "tool_result", tool_use_id: "long-bash", content: "done" }],
+            },
+          };
+          toolEnded.resolve();
+          await finish.promise;
+          yield SUCCESS_RESULT;
+        },
+        {
+          noOutputTimeoutMs: 600_000,
+          activeToolCount: events.activeParsedToolCount,
+          consumeStdout: (chunk) => parser.push(chunk),
+        },
+      );
+      try {
+        await toolStarted.promise;
+        expect(events.activeParsedToolCount()).toBe(1);
+        const injection = getAttachedBackend(operation)?.messageInjectionV2;
+        if (!injection) {
+          throw new Error("Host did not attach native steering.");
+        }
+        let settled = 0;
+        const outcomes = ["first", "second"].map((text, index) =>
+          injection
+            .queueMessage(text, { userTurnTranscriptRecorder: recorders[index] }, () => {}, "run")
+            .then((result) => {
+              settled++;
+              return result;
+            }),
+        );
+        await Promise.all(dispatched.map((entry) => entry.promise));
+        await vi.advanceTimersByTimeAsync(130_000);
+        expect(settled).toBe(0);
+        expect(executionSignal?.aborted).toBe(false);
+        if (completion !== "receipt") {
+          const stopped =
+            completion === "caller cancellation"
+              ? expect(processRun).rejects.toMatchObject({ name: "AbortError" })
+              : expect(processRun).resolves.toMatchObject({ reason: "overall-timeout" });
+          if (completion === "caller cancellation") {
+            caller.abort();
+          } else {
+            await vi.advanceTimersByTimeAsync(1);
+          }
+          endTool.resolve();
+          finish.resolve();
+          await expect(Promise.all(outcomes)).resolves.toEqual([
+            expect.objectContaining({ transcriptCommit: "unconfirmed" }),
+            expect.objectContaining({ transcriptCommit: "unconfirmed" }),
+          ]);
+          await stopped;
+          expect(sent).toEqual(["first", "second"]);
+          expect(executionSignal?.aborted).toBe(true);
+          expect(vi.getTimerCount()).toBe(0);
+          return;
+        }
+        endTool.resolve();
+        await toolEnded.promise;
+        expect(events.activeParsedToolCount()).toBe(0);
+        await vi.advanceTimersByTimeAsync(119_999);
+        expect(settled).toBe(0);
+        receipts.forEach((receipt) => receipt.resolve());
+        await expect(Promise.all(outcomes)).resolves.toEqual([undefined, undefined]);
+        expect(sent).toEqual(["first", "second"]);
+        finish.resolve();
+        await expect(processRun).resolves.toMatchObject({ reason: "exit" });
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        endTool.resolve();
+        receipts.forEach((receipt) => receipt.resolve());
+        finish.resolve();
+        await processRun.catch(() => {});
+        operation.complete();
+      }
+    },
+  );
+
   it("rechecks source authority after asynchronous transcript preparation", async () => {
     const target = await createTarget();
     const host = await createHost();
@@ -415,10 +561,14 @@ describe("CLI native steering admission", () => {
     }
   });
 
-  it.each(["receipt failure", "unregister", "abort"])(
-    "retains nonreplayable custody after dispatch and %s",
+  it.each(["receipt failure", "unregister", "abort", "source abort"])(
+    "retains nonreplayable custody during a tool after dispatch and %s",
     async (failure) => {
-      const host = await createHost();
+      const host = await createHost(
+        () => {},
+        () => 1,
+      );
+      const source = new AbortController();
       const dispatched = createDeferred();
       const receipt = createDeferred();
       const accepted = vi.fn();
@@ -427,12 +577,22 @@ describe("CLI native steering admission", () => {
         dispatched.resolve();
         await receipt.promise;
       });
-      const result = host.queue("correction", { onQueueAccepted: accepted }, () => {}, "run");
+      const result = host.queue(
+        "correction",
+        {
+          onQueueAccepted: accepted,
+          abortSignal: source.signal,
+        },
+        () => {},
+        "run",
+      );
       await dispatched.promise;
       if (failure === "receipt failure") {
         receipt.reject(new Error("Native receipt lost"));
       } else if (failure === "unregister") {
         unregister();
+      } else if (failure === "source abort") {
+        source.abort();
       } else {
         host.controller.abort();
       }
@@ -442,40 +602,58 @@ describe("CLI native steering admission", () => {
     },
   );
 
-  it("bounds receipt waits and revokes late callbacks after the delivery deadline", async () => {
-    const target = await createTarget();
-    const host = await createHost();
-    const recorder = createUserTurnTranscriptRecorder({ input: { text: "deadline" }, target });
-    await recorder.persistApproved();
-    const dispatched = createDeferred();
-    const receipt = createDeferred();
-    let retained: CliBackendMessageInjectionInput | undefined;
-    host.registerMessageInjection(async (input) => {
-      retained = input;
-      input.onDispatched();
-      dispatched.resolve();
-      await receipt.promise;
-    });
-    vi.useFakeTimers();
-    const outcome = host.queue(
-      "deadline",
-      {
-        userTurnTranscriptRecorder: recorder,
-        deliveryTimeoutMs: 25,
-      },
-      () => {},
-      "run",
-    );
-    await dispatched.promise;
-    await vi.advanceTimersByTimeAsync(25);
-    await expect(outcome).resolves.toMatchObject({
-      transcriptCommit: "unconfirmed",
-      errorMessage: expect.stringContaining("timed out"),
-    });
-    expect(() => retained?.assertCurrent()).toThrow("timed out");
-    expect(vi.getTimerCount()).toBe(0);
-    receipt.resolve();
-  });
+  it.each([false, true])(
+    "bounds tool-free receipt time and revokes late callbacks (paused=%s)",
+    async (paused) => {
+      const target = await createTarget();
+      let activeTools = 0;
+      const host = await createHost(
+        () => {},
+        () => activeTools,
+      );
+      const recorder = createUserTurnTranscriptRecorder({ input: { text: "deadline" }, target });
+      await recorder.persistApproved();
+      const dispatched = createDeferred();
+      const receipt = createDeferred();
+      let retained: CliBackendMessageInjectionInput | undefined;
+      host.registerMessageInjection(async (input) => {
+        retained = input;
+        input.onDispatched();
+        dispatched.resolve();
+        await receipt.promise;
+      });
+      vi.useFakeTimers();
+      const outcome = host.queue(
+        "deadline",
+        {
+          userTurnTranscriptRecorder: recorder,
+          deliveryTimeoutMs: 25,
+        },
+        () => {},
+        "run",
+      );
+      await dispatched.promise;
+      await vi.advanceTimersByTimeAsync(10);
+      if (paused) {
+        activeTools = 1;
+        host.refreshReceiptWaits();
+        await vi.advanceTimersByTimeAsync(130_000);
+        expect(() => retained?.assertCurrent()).not.toThrow();
+        activeTools = 0;
+        host.refreshReceiptWaits();
+      }
+      await vi.advanceTimersByTimeAsync(14);
+      expect(() => retained?.assertCurrent()).not.toThrow();
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(outcome).resolves.toMatchObject({
+        transcriptCommit: "unconfirmed",
+        errorMessage: expect.stringContaining("timed out"),
+      });
+      expect(() => retained?.assertCurrent()).toThrow("timed out");
+      expect(vi.getTimerCount()).toBe(0);
+      receipt.resolve();
+    },
+  );
 
   it("revokes retained callbacks and preserves a replacement sink when old cleanup runs", async () => {
     const host = await createHost();
