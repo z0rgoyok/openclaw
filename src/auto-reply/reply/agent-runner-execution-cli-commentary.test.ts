@@ -210,7 +210,7 @@ describe("executeAgentTurn: CLI durable commentary", () => {
       });
       expect(result.kind).toBe("success");
       if (result.kind === "success") {
-        expect(result.runResult.payloads.filter((payload) => !payload.isReasoning)).toEqual([
+        expect(result.runResult.payloads?.filter((payload) => !payload.isReasoning)).toEqual([
           { text: "Subprocess final answer." },
         ]);
       }
