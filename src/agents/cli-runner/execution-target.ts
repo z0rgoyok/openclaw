@@ -1,3 +1,4 @@
+import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import type { CliBackendExecute } from "../../plugins/cli-backend.types.js";
 import { getPluginValueInstance } from "../../plugins/plugin-instance-scope.js";
@@ -7,7 +8,11 @@ import { resolveReplyExpectation } from "../reply-completion.js";
 import type { CliExecutionTarget, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 /** Keep all CLI transports bound to the same reply-operation identity and terminal contract. */
-export function attachCliReplyBackend(params: RunCliAgentParams, cancel: () => void) {
+export function attachCliReplyBackend(
+  params: RunCliAgentParams,
+  cancel: () => void,
+  messageInjectionV2?: ReplyBackendMessageInjectionV2,
+) {
   if (!params.replyOperation) {
     return undefined;
   }
@@ -16,6 +21,9 @@ export function attachCliReplyBackend(params: RunCliAgentParams, cancel: () => v
     runId: params.runId,
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
     terminalReplyExpectation: resolveReplyExpectation(params),
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
+    ...(messageInjectionV2 ? { messageInjectionV2 } : {}),
     cancel,
   };
   params.replyOperation.attachBackend(handle);

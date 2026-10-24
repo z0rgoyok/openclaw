@@ -155,6 +155,14 @@ export async function createTelegramBotCore(
   bot.use(async (ctx, next) => {
     const begin = updateTracker.beginUpdate(ctx);
     if (!begin.accepted) {
+      // A timed-out claim can replay while its earlier handler is still unwinding.
+      // Only a completed duplicate is a terminal skip; pending work cannot
+      // acknowledge the replay or it will tombstone an update never adopted.
+      recordTelegramMessageProcessingResult(
+        begin.reason === "in-flight"
+          ? { kind: "failed-retryable", error: new Error("telegram update still in flight") }
+          : { kind: "skipped" },
+      );
       return;
     }
     try {

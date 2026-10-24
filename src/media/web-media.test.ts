@@ -1192,7 +1192,7 @@ describe("loadWebMedia", () => {
     }
   });
 
-  it("rejects host-read HTML files outside the trusted OpenClaw temp root", async () => {
+  it("rejects host-read HTML outside temp without explicit authorized roots", async () => {
     const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-host-html-"));
     const htmlFile = path.join(outsideRoot, "report.html");
     await fs.writeFile(htmlFile, "<!doctype html><title>Report</title><h1>Report</h1>\n", "utf8");

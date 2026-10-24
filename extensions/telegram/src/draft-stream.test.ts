@@ -22,6 +22,8 @@ function expectPreviewSend(
   expect(api.sendMessage).toHaveBeenCalledWith(123, text, params);
 }
 
+const silentThreadParams = { message_thread_id: 42, disable_notification: true };
+
 function expectNthPreviewSend(
   api: ReturnType<typeof createMockDraftApi>,
   call: number,
@@ -409,7 +411,7 @@ describe("createTelegramDraftStream", () => {
         stream.update("Replacement preview");
         await stream.flush();
 
-        expectNthPreviewSend(api, 2, "Replacement preview", { message_thread_id: 42 });
+        expectNthPreviewSend(api, 2, "Replacement preview", silentThreadParams);
         await vi.advanceTimersByTimeAsync(4_000);
         expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
         expect(warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
@@ -483,9 +485,7 @@ describe("createTelegramDraftStream", () => {
         expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
         // Until detached deletion succeeds, the stale send still owns the
         // single-use reply and the replacement must omit it.
-        expectNthPreviewSend(api, 2, "Message B partial", {
-          message_thread_id: 42,
-        });
+        expectNthPreviewSend(api, 2, "Message B partial", silentThreadParams);
       } finally {
         vi.useRealTimers();
       }
@@ -552,7 +552,7 @@ describe("createTelegramDraftStream", () => {
         await vi.advanceTimersByTimeAsync(0);
         await stream.flush();
 
-        expectNthPreviewSend(api, 2, "Message B partial", { message_thread_id: 42 });
+        expectNthPreviewSend(api, 2, "Message B partial", silentThreadParams);
         await vi.advanceTimersByTimeAsync(4_000);
         expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
         expect(warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));

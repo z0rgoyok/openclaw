@@ -103,6 +103,35 @@ describe("Claude CLI assistant snapshots", () => {
     expect(parser.getOutput()?.text).toBe("Done.");
   });
 
+  it("delivers completed tool-use message blocks once without exposing thinking", () => {
+    const commentary: string[] = [];
+    const deltas: string[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: BACKEND,
+      providerId: "claude-cli",
+      onAssistantDelta: ({ delta }) => deltas.push(delta),
+      onCommentaryText: (text) => commentary.push(text),
+    });
+    const block = (content: unknown[]) => ({
+      type: "assistant",
+      message: { id: "completed-before-tool", stop_reason: "tool_use", content },
+    });
+    const text = { type: "text", text: "Checking the build now." };
+    parser.push(
+      joinJsonlFrames(
+        block([{ type: "thinking", thinking: "Private reasoning." }]),
+        block([text]),
+        block([text]),
+        block([{ type: "tool_use", id: "tool-check", name: "Bash", input: {} }]),
+        { type: "result", subtype: "success", result: "Build checked." },
+      ),
+    );
+    parser.finish();
+    expect(commentary).toEqual(["Checking the build now."]);
+    expect(deltas).toEqual([]);
+    expect(parser.getOutput()?.text).toBe("Build checked.");
+  });
+
   it("preserves tool-split snapshots when commentary is disabled", () => {
     const deltas: Array<{ text: string; delta: string }> = [];
     const parser = createCliJsonlStreamingParser({

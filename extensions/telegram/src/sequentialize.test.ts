@@ -1,7 +1,8 @@
 import { Bot, type MiddlewareFn } from "grammy";
 import type { Chat, Update } from "grammy/types";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { runWithTelegramSpooledReplayUpdate } from "./bot-processing-outcome.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { createTelegramSequentializer } from "./sequentialize.js";
 
@@ -92,6 +93,47 @@ describe("Telegram sequential middleware", () => {
       firstGate.resolve();
       secondGate.resolve();
       await Promise.allSettled(runs);
+    }
+  });
+
+  it("cancels a queued claim without running it later or releasing earlier work", async () => {
+    const release = createDeferred<void>();
+    const started = createDeferred<void>();
+    const owner = new AbortController();
+    const seen: number[] = [];
+    const bot = createSequencedBot(async (ctx) => {
+      seen.push(ctx.update.update_id);
+      if (ctx.update.update_id === 1) {
+        started.resolve();
+        await release.promise;
+      }
+    });
+    const first = bot.handleUpdate(topicMessage(1, 1, 9));
+    await started.promise;
+    const update = topicMessage(2, 2, 9);
+    const expired = runWithTelegramSpooledReplayUpdate(update, () => bot.handleUpdate(update), {
+      abortSignal: owner.signal,
+      onAdopted: async () => {},
+      onDeferred: () => {},
+      onAbandoned: async () => {},
+    });
+    const error = new Error("claim adoption stalled");
+    let rejection: unknown;
+    const rejected = expired.catch((caught: unknown) => {
+      rejection = caught;
+    });
+    owner.abort(error);
+    const third = bot.handleUpdate(topicMessage(3, 3, 9));
+    try {
+      await vi.waitFor(() => expect(rejection).toMatchObject({ error }), { timeout: 1000 });
+      await rejected;
+      expect(seen).toEqual([1]);
+      release.resolve();
+      await Promise.all([first, third]);
+      expect(seen).toEqual([1, 3]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([first, expired, third]);
     }
   });
 

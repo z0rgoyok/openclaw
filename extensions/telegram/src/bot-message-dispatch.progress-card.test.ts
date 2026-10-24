@@ -16,10 +16,123 @@ import type { DispatchReplyWithBufferedBlockDispatcherArgs } from "./bot-message
 import type * as TelegramDeliveryModule from "./bot/delivery.replies.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import type * as TelegramDraftModule from "./draft-stream.js";
+import { createTelegramMessageCache } from "./message-cache.js";
 import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 import type * as TelegramEditModule from "./send-edit.js";
 
 describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
+  it("moves the active card below new chat messages and edits subsequent tools in place", async () => {
+    vi.useFakeTimers();
+    try {
+      const actualDraft = await vi.importActual<typeof TelegramDraftModule>("./draft-stream.js");
+      let draft: TelegramDraftStream | undefined;
+      createTelegramDraftStream.mockImplementation((params) => {
+        const stream = actualDraft.createTelegramDraftStream(params);
+        draft ??= stream;
+        return stream;
+      });
+      const bot = createBot();
+      let nextId = 10;
+      const send = vi.spyOn(bot.api, "sendMessage").mockImplementation(async (_chatId, text) => ({
+        message_id: nextId++,
+        date: 0,
+        chat: { id: 123, type: "private", first_name: "Test" },
+        text,
+      }));
+      const edit = vi.spyOn(bot.api, "editMessageText").mockResolvedValue(true);
+      const remove = vi.spyOn(bot.api, "deleteMessage").mockResolvedValue(true);
+      let queuedOptions: DispatchReplyWithBufferedBlockDispatcherArgs["replyOptions"];
+      const cache = createTelegramMessageCache();
+      const record = (messageId: number, accountId = "default", threadId?: number) =>
+        cache.record({
+          accountId,
+          chatId: 123,
+          msg: {
+            message_id: messageId,
+            date: 0,
+            chat: { id: 123, type: "private", first_name: "Test" },
+            text: "Continue",
+            ...(threadId ? { message_thread_id: threadId } : {}),
+          },
+        });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+        queuedOptions = replyOptions;
+        await emitToolStart(replyOptions, { name: "exec", toolCallId: "first", phase: "start" });
+        await draft?.flush();
+        expect(draft?.messageId()).toBe(10);
+        await record(100, "other");
+        await record(100, "default", 777);
+        await replyOptions?.onItemEvent?.({
+          kind: "tool",
+          name: "read",
+          itemId: "barrier",
+          phase: "end",
+        });
+        await draft?.flush();
+        expect(send).toHaveBeenCalledTimes(1);
+        nextId = 12;
+        await Promise.all([record(11), record(11)]);
+        await replyOptions?.onItemEvent?.({
+          kind: "tool",
+          name: "read",
+          itemId: "second",
+          phase: "end",
+        });
+        await draft?.flush();
+        expect(draft?.messageId()).toBe(12);
+        expect(send).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(4000);
+        expect(remove).toHaveBeenCalledWith(123, 10);
+        await emitToolStart(replyOptions, { name: "exec", toolCallId: "third", phase: "start" });
+        await draft?.flush();
+        expect(send).toHaveBeenCalledTimes(2);
+        expect(edit).toHaveBeenCalled();
+        await record(12); // Own provider observation and repeated older messages do not rotate.
+        await record(11);
+        await replyOptions?.onItemEvent?.({
+          kind: "tool",
+          name: "read",
+          itemId: "dedupe",
+          phase: "end",
+        });
+        await draft?.flush();
+        expect(send).toHaveBeenCalledTimes(2);
+        return { queuedFinal: false };
+      });
+      await dispatchWithContext({
+        bot,
+        context: createContext({
+          ctxPayload: createDirectSessionPayload(),
+          threadSpec: { id: undefined, scope: "none" },
+          replyThreadId: undefined,
+        }),
+        streamMode: "progress",
+        telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
+      });
+      await record(20);
+      await vi.runOnlyPendingTimersAsync();
+      expect(send).toHaveBeenCalledTimes(2);
+      nextId = 30;
+      await queuedOptions?.onQueuedFollowupAdmitted?.();
+      await emitToolStart(queuedOptions, { name: "exec", toolCallId: "followup", phase: "start" });
+      await draft?.flush();
+      nextId = 32;
+      await record(31);
+      await queuedOptions?.onItemEvent?.({
+        kind: "tool",
+        name: "read",
+        itemId: "followup-read",
+        phase: "end",
+      });
+      await draft?.flush();
+      expect(draft?.messageId()).toBe(32);
+      await queuedOptions?.onQueuedFollowupSettled?.();
+      await vi.runOnlyPendingTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([false, true])(
     "keeps a full plan and recent activity after failed named tool items (rich: %s)",
     (richMessages) => {
