@@ -15,7 +15,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,7 +35,7 @@ import {
 } from "./telegram-ingress-coalescing.test-support.js";
 
 const downstreamTurns = vi.hoisted(() =>
-  vi.fn(async (_ctx: MsgContext, _abortSignal?: AbortSignal) => ({
+  vi.fn(async (_ctx: MsgContext, _abortSignal?: AbortSignal, _replyOptions?: GetReplyOptions) => ({
     queuedFinal: false,
     counts: { block: 0, final: 0, tool: 0 },
   })),
@@ -58,7 +58,11 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
     ...actual,
     runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) =>
       await runTelegramChannelInboundEventWithHarness(actual, params, async (dispatchParams) => {
-        return await downstreamTurns(dispatchParams.ctx, dispatchParams.replyOptions?.abortSignal);
+        return await downstreamTurns(
+          dispatchParams.ctx,
+          dispatchParams.replyOptions?.abortSignal,
+          dispatchParams.replyOptions,
+        );
       }),
   };
 });
@@ -294,6 +298,35 @@ describe("Telegram durable ingress coalescing", () => {
     activeResources.push(resources);
     return resources;
   }
+
+  it("admits same-chat steering while an adopted earlier turn is still running", async () => {
+    const release = createDeferred<void>();
+    const adopted = createDeferred<void>();
+    let firstFinished = false;
+    downstreamTurns.mockImplementation(async (ctx, _signal, options) => {
+      await options?.turnAdoptionLifecycle?.onAdopted();
+      if (ctx.MessageSid === "1") {
+        adopted.resolve();
+        await release.promise;
+        firstFinished = true;
+      }
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+    const { monitor } = await createMonitor();
+    monitor.start();
+    try {
+      await monitor.admit(textUpdate({ updateId: 1001, messageId: 1, text: "long task" }));
+      await adopted.promise;
+      await monitor.admit(textUpdate({ updateId: 1002, messageId: 2, text: "change the task" }));
+      await vi.waitFor(() => expect(downstreamTurns).toHaveBeenCalledTimes(2), { timeout: 2000 });
+      expect(firstFinished).toBe(false);
+      expect(downstreamTurns.mock.calls[1]?.[0].MessageSid).toBe("2");
+      await assertSpoolTombstoned({ stateDir, updateIds: [1001, 1002] });
+    } finally {
+      release.resolve();
+      await monitor.stop();
+    }
+  });
 
   it("coalesces album members admitted across separate drain passes", async () => {
     const albumTimers = holdTelegramMediaTimeouts(40);

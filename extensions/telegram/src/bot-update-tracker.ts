@@ -34,7 +34,7 @@ type BeginUpdateResult =
     }
   | {
       accepted: false;
-      reason: "accepted-watermark" | "semantic-dedupe";
+      reason: "accepted-watermark" | "semantic-dedupe" | "in-flight";
     };
 
 type FinishUpdateOptions = {
@@ -209,6 +209,10 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     const updateId = resolveTelegramUpdateId(ctx);
     const updateKey = buildTelegramUpdateKey(ctx);
     if (typeof updateId === "number") {
+      if (pendingUpdateIds.has(updateId)) {
+        skip(`update:${updateId}`);
+        return { accepted: false, reason: "in-flight" };
+      }
       if (failedUpdateIds.has(updateId)) {
         failedUpdateIds.delete(updateId);
       } else if (initialUpdateId !== null && updateId <= initialUpdateId) {
@@ -216,13 +220,17 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
         skip(`update:${updateId}`);
         return { accepted: false, reason: "accepted-watermark" };
       } else if (acceptedUpdateIds.has(updateId)) {
-        // Same process already accepted this exact id (completed or in-flight).
+        // Same process already completed this exact id.
         skip(`update:${updateId}`);
         return { accepted: false, reason: "accepted-watermark" };
       }
     }
     if (updateKey) {
-      if (activeHandledUpdateKeys.has(updateKey) || recentUpdates.peek(updateKey)) {
+      if (activeHandledUpdateKeys.has(updateKey)) {
+        skip(updateKey);
+        return { accepted: false, reason: "in-flight" };
+      }
+      if (recentUpdates.peek(updateKey)) {
         skip(updateKey);
         return { accepted: false, reason: "semantic-dedupe" };
       }

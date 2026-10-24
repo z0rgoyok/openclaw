@@ -285,12 +285,14 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                 }
               : () => false,
             onQueuedFollowupAdmitted: () => {
+              turn.resumeProgressObserver();
               beginDraftQueuedFollowup(turn);
               turn.previewLifecycle.reset();
               turn.finalDispatchClaimed = false;
               turn.progressCompositor.beginNewTurn({ force: true });
             },
             onQueuedFollowupSettled: async () => {
+              turn.disposeProgressObserver();
               turn.progressCompositor.cancel();
               await turn.draftEventQueue;
               await cleanupDrafts(turn, turn.isSuperseded());
