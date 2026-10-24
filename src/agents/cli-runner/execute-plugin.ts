@@ -541,6 +541,7 @@ export async function executePluginOwnedProcess(params: {
     abortSignal: signal,
     sessionId: run.sessionId,
     cwd,
+    activeToolCount: params.activeToolCount,
     onDispatched: () => {
       outstanding.replayUnsafe = true;
     },
@@ -650,6 +651,8 @@ export async function executePluginOwnedProcess(params: {
         reportOutstandingWork();
       }
       params.consumeStdout(`${JSON.stringify(next.value)}\n`);
+      // The synchronous parser has now applied this exact turn's tool start/result.
+      messageInjection.refreshReceiptWaits();
       outstanding.observed = true;
       if (
         !(next.value.type === "system" && next.value.subtype === "init") &&

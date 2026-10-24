@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type {
   ReplyBackendMessageInjectionV2,
   ReplyBackendQueueMessageOptions,
@@ -16,6 +16,7 @@ export function createCliPluginMessageInjection(params: {
   sessionId?: string;
   cwd: string;
   onDispatched?: () => void;
+  activeToolCount?: () => number;
 }) {
   type Registration = {
     sink: CliBackendMessageInjection;
@@ -24,6 +25,12 @@ export function createCliPluginMessageInjection(params: {
   let registration: Registration | undefined;
   let closed = false;
   let dispatchTail = Promise.resolve();
+  const receiptWaits = new Set<() => void>();
+  const refreshReceiptWaits = () => {
+    for (const refresh of receiptWaits) {
+      refresh();
+    }
+  };
   const closeRegistration = (owner: Registration) => {
     if (registration === owner) {
       registration = undefined;
@@ -95,6 +102,28 @@ export function createCliPluginMessageInjection(params: {
         let dispatched = false;
         const cancelled = createDeferredCore();
         let timer: ReturnType<typeof setTimeout> | undefined;
+        let remainingMs = resolvePositiveTimerTimeoutMs(options?.deliveryTimeoutMs ?? 120_000, 1);
+        let countingSince: number | undefined;
+        const refreshReceiptWait = () => {
+          if ((params.activeToolCount?.() ?? 0) > 0) {
+            if (countingSince !== undefined) {
+              remainingMs -= Math.max(0, Date.now() - countingSince);
+              countingSince = undefined;
+              clearTimeout(timer);
+              timer = undefined;
+            }
+          } else if (countingSince === undefined && !receiptExpired) {
+            countingSince = Date.now();
+            timer = setTimeout(
+              () => {
+                receiptExpired = true;
+                cancelled.resolve();
+              },
+              Math.max(0, remainingMs),
+            );
+            timer.unref?.();
+          }
+        };
         const onAbort = () => cancelled.resolve();
         options?.abortSignal?.addEventListener("abort", onAbort, { once: true });
         try {
@@ -108,14 +137,10 @@ export function createCliPluginMessageInjection(params: {
           }
           const committedText = await persistInputInHostContext(text, options);
           assertCurrent();
-          timer = setTimeout(
-            () => {
-              receiptExpired = true;
-              cancelled.resolve();
-            },
-            clampPositiveTimerTimeoutMs(options?.deliveryTimeoutMs ?? 120_000),
-          );
-          timer.unref?.();
+          // A current parsed tool can keep native input queued until its result.
+          // Count only tool-free receipt time; the run/tool watchdog still bounds work.
+          receiptWaits.add(refreshReceiptWait);
+          refreshReceiptWait();
           const receipt = owner.sink({
             text: committedText,
             assertCurrent,
@@ -155,6 +180,7 @@ export function createCliPluginMessageInjection(params: {
         } finally {
           admissionOpen = false;
           clearTimeout(timer);
+          receiptWaits.delete(refreshReceiptWait);
           dispatchedOrRejected.resolve();
           options?.abortSignal?.removeEventListener("abort", onAbort);
         }
@@ -189,5 +215,5 @@ export function createCliPluginMessageInjection(params: {
     // A write-hook redaction must replace every copy of the original prompt.
     return committed.content;
   }
-  return { messageInjectionV2, registerMessageInjection, close };
+  return { messageInjectionV2, registerMessageInjection, refreshReceiptWaits, close };
 }
