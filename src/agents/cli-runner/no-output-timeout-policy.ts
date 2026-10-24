@@ -29,7 +29,9 @@ export function resolveCliNoOutputTimeoutDecision(params: CliNoOutputTimeoutPoli
       ? Math.max(params.timeoutMs, graceMs) - params.quietDurationMs
       : undefined;
   const retryable =
-    (!params.cliTimeout.observedActivity && !params.hasOutputText) ||
+    (!params.cliTimeout.observedActivity &&
+      !params.hasOutputText &&
+      !params.hasReplayUnsafeActivity) ||
     (params.allowResumeControlOnlyRetry === true &&
       isReplaySafeCliResumeControlOnly(
         params.useResume,

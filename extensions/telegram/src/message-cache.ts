@@ -24,6 +24,8 @@ import {
 } from "./message-cache-codec.js";
 import {
   isTelegramMessageCacheSourceMessage,
+  telegramMessageCacheKey,
+  telegramMessageCacheKeyPrefix,
   parseTelegramResolvedMedia,
   type PersistedTelegramMessageCacheValue,
   type TelegramResolvedMedia,
@@ -31,6 +33,7 @@ import {
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
 } from "./message-cache-persistence.js";
+import { noteTelegramMessage } from "./message-observation.js";
 import { parseTelegramMessageThreadId } from "./outbound-params.js";
 import type { TelegramPromptContextProjection } from "./prompt-context-projection.js";
 import { getOptionalTelegramRuntime } from "./runtime.js";
@@ -125,25 +128,6 @@ type TelegramMessageCacheRetainedStore = Required<
 
 const RETAINED_MESSAGE_PAGE_SIZE = 256;
 const RETAINED_PROMOTION_BATCH_SIZE = 10_000;
-
-function telegramMessageCacheKey(params: {
-  scopeKey: string | undefined;
-  accountId: string;
-  chatId: string | number;
-  messageId: string;
-}) {
-  const key = `${params.accountId}:${params.chatId}:${params.messageId}`;
-  return params.scopeKey ? `${params.scopeKey}:${key}` : key;
-}
-
-function telegramMessageCacheKeyPrefix(params: {
-  scopeKey: string | undefined;
-  accountId: string;
-  chatId: string | number;
-}) {
-  const prefix = `${params.accountId}:${params.chatId}:`;
-  return params.scopeKey ? `${params.scopeKey}:${prefix}` : prefix;
-}
 
 function trimMessages(messages: Map<string, TelegramCachedMessageNode>, maxMessages: number): void {
   while (messages.size > maxMessages) {
@@ -596,6 +580,10 @@ export function createTelegramMessageCache(params?: {
           });
         }
       }
+      noteTelegramMessage(
+        { accountId, chatId, threadId: recordedEntry.threadId },
+        Number(recordedEntry.messageId),
+      );
       return recordedEntry;
     },
     recordResolvedMedia: async ({ accountId, botUserId, chatId, messageId, media }) => {

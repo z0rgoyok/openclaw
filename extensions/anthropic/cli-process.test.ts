@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -50,6 +50,26 @@ const PROTOCOL_CHILD = `
       });
     }
   });
+`;
+
+const STARTUP_HOOK_CHILD = String.raw`
+  import { createInterface } from "node:readline";
+  import { writeFileSync } from "node:fs";
+  const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
+  let turn = 0;
+  for await (const line of createInterface({ input: process.stdin })) {
+    const message = JSON.parse(line);
+    if (message.type === "control_request") {
+      for (let index = 0; index < 40; index++) {
+        send({ type: "system", subtype: index % 2 ? "hook_response" : "hook_started", hook_id: String(index), pid: process.pid });
+      }
+      if (process.env.CLAUDE_FIXTURE_SCENARIO === "cancel") continue;
+      send({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: {} } });
+    } else if (message.type === "user") {
+      writeFileSync("user.received", message.message.content);
+      send({ type: "result", subtype: "success", result: JSON.stringify({ pid: process.pid, turn: ++turn, input: message.message.content }) });
+    }
+  }
 `;
 
 afterEach(async () => {
@@ -120,6 +140,55 @@ function attachLiveSession(context: CliBackendExecuteContext) {
 }
 
 describe("Claude subprocess diagnostics through the direct CLI transport", () => {
+  it("drains startup hook bursts before initialization and reuses the warm process", async () => {
+    const context = await contextForChild(STARTUP_HOOK_CHILD);
+    attachLiveSession(context);
+    const records = await collect(context);
+    expect(
+      records.filter((record) => record.type === "system").map((record) => record.hook_id),
+    ).toEqual(Array.from({ length: 40 }, (_, index) => String(index)));
+    expect(records).toHaveLength(41);
+    const first = JSON.parse(String(records.at(-1)?.result));
+    expect(first).toMatchObject({ turn: 1, input: context.prompt });
+    const second = await collect({ ...context, prompt: "warm input" });
+    expect(second).toHaveLength(1);
+    expect(JSON.parse(String(second.at(-1)?.result))).toEqual({
+      pid: first.pid,
+      turn: 2,
+      input: "warm input",
+    });
+  });
+
+  it.each(["iterator return", "abort"] as const)(
+    "cancels during startup before submitting user input: %s",
+    async (cancellation) => {
+      const controller = new AbortController();
+      const context = await contextForChild(STARTUP_HOOK_CHILD);
+      context.abortSignal = AbortSignal.any([controller.signal, context.abortSignal!]);
+      context.env.CLAUDE_FIXTURE_SCENARIO = "cancel";
+      const current = attachLiveSession(context);
+      const events = executeClaudeCli(context);
+      const iterator = events[Symbol.asyncIterator]();
+      const first = await iterator.next();
+      expect(first.value).toMatchObject({ type: "system", subtype: "hook_started", hook_id: "0" });
+      if (cancellation === "abort") {
+        const reason = new Error("Synthetic cancellation before initialization.");
+        controller.abort(reason);
+        const remaining = async () => {
+          for await (const record of events) {
+            void record;
+          }
+        };
+        await expect(remaining()).rejects.toBe(reason);
+      } else {
+        await iterator.return?.();
+      }
+      expect(current()).toBeUndefined();
+      await expect(access(path.join(context.cwd, "user.received"))).rejects.toThrow();
+      expect(() => process.kill(Number(first.value?.pid), 0)).toThrow();
+    },
+  );
+
   it("drains pipe-sized stderr and reports a bounded redacted fatal diagnostic", async () => {
     const secret = "sk-ant-api03-synthetic-diagnostic-credential-123456789";
     const context = await contextForChild(`
