@@ -146,7 +146,11 @@ export function createProgressState(
   let unsubscribe: (() => void) | undefined;
   const resumeProgressObserver = () => {
     disposed = false;
-    unsubscribe?.();
+  };
+  const ensureProgressObserver = () => {
+    if (disposed || unsubscribe) {
+      return;
+    }
     unsubscribe = observeTelegramConversation(
       {
         accountId: config.context.route.accountId,
@@ -167,7 +171,6 @@ export function createProgressState(
     unsubscribe?.();
     unsubscribe = undefined;
   };
-  resumeProgressObserver();
   const progressCompositor = createChannelProgressDraftCompositor({
     preparedItems: true,
     entry: config.telegramCfg,
@@ -182,6 +185,9 @@ export function createProgressState(
     shouldStartNow: (line) => typeof line !== "string" && Boolean(line?.toolName),
     update: async (streamText, options) => {
       await prepareAnswerLaneForToolProgress(getTurn());
+      // Steering-only dispatches never own a card and must not replace the
+      // observer of the turn whose model is still running.
+      ensureProgressObserver();
       draftState.answerLane.lastPartialText = streamText;
       draftState.answerLane.hasStreamedMessage = true;
       draftState.answerLane.finalized = false;
