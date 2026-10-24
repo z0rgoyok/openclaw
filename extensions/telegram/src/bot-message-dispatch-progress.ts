@@ -22,6 +22,7 @@ import type {
   TelegramProgressStateSlice,
 } from "./bot-message-dispatch.types.js";
 import type { DraftLaneState } from "./lane-delivery-text-deliverer.js";
+import { observeTelegramConversation } from "./message-observation.js";
 import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 import { editMessageTelegram } from "./send.js";
 
@@ -85,6 +86,91 @@ export function createProgressState(
   draftState: TelegramProgressDraftState,
   getTurn: () => Turn,
 ): TelegramProgressStateSlice {
+  let latestObservedMessageId = 0;
+  let repositionQueued = false;
+  let disposed = false;
+  const scheduleReposition = () => {
+    if (disposed || repositionQueued) {
+      return;
+    }
+    repositionQueued = true;
+    void enqueueDraftEvent(getTurn(), async () => {
+      let repeat = false;
+      try {
+        const turn = getTurn();
+        const lane = draftState.answerLane;
+        const stream = lane.stream;
+        await stream?.waitForInFlight();
+        const currentId = stream?.messageId();
+        if (
+          disposed ||
+          turn.isSuperseded() ||
+          !canPushToolProgress(turn) ||
+          !turn.activeAnswerDraftIsToolProgressOnly ||
+          !stream ||
+          currentId === undefined ||
+          latestObservedMessageId <= currentId
+        ) {
+          return;
+        }
+        const preview = renderTelegramProgressDraftPreview(progressCompositor.getSnapshot(), {
+          toolProgress: progressCompositor.previewToolProgressEnabled,
+          richMessages: config.richMessages,
+          maxLines: resolveChannelProgressDraftMaxLines(config.telegramCfg),
+          maxLineChars: resolveChannelProgressDraftMaxLineChars(config.telegramCfg),
+        });
+        if (!preview.text.trim()) {
+          return;
+        }
+        stream.rotateToNewMessageDeferringDelete();
+        stream.updatePreview(preview);
+        await stream.flush();
+        // A user can write while the replacement is in flight. Coalesce that
+        // observation into one further move, only after a confirmed receipt.
+        const replacedId = stream.messageId();
+        if (
+          replacedId !== undefined &&
+          replacedId !== currentId &&
+          latestObservedMessageId > replacedId
+        ) {
+          repeat = true;
+        }
+      } finally {
+        repositionQueued = false;
+        if (repeat) {
+          scheduleReposition();
+        }
+      }
+    });
+  };
+  let unsubscribe: (() => void) | undefined;
+  const resumeProgressObserver = () => {
+    disposed = false;
+  };
+  const ensureProgressObserver = () => {
+    if (disposed || unsubscribe) {
+      return;
+    }
+    unsubscribe = observeTelegramConversation(
+      {
+        accountId: config.context.route.accountId,
+        chatId: config.context.chatId,
+        threadId: config.context.threadSpec.id,
+      },
+      (messageId) => {
+        if (messageId <= latestObservedMessageId) {
+          return;
+        }
+        latestObservedMessageId = messageId;
+        scheduleReposition();
+      },
+    );
+  };
+  const disposeProgressObserver = () => {
+    disposed = true;
+    unsubscribe?.();
+    unsubscribe = undefined;
+  };
   const progressCompositor = createChannelProgressDraftCompositor({
     preparedItems: true,
     entry: config.telegramCfg,
@@ -99,6 +185,9 @@ export function createProgressState(
     shouldStartNow: (line) => typeof line !== "string" && Boolean(line?.toolName),
     update: async (streamText, options) => {
       await prepareAnswerLaneForToolProgress(getTurn());
+      // Steering-only dispatches never own a card and must not replace the
+      // observer of the turn whose model is still running.
+      ensureProgressObserver();
       draftState.answerLane.lastPartialText = streamText;
       draftState.answerLane.hasStreamedMessage = true;
       draftState.answerLane.finalized = false;
@@ -110,6 +199,7 @@ export function createProgressState(
           maxLineChars: resolveChannelProgressDraftMaxLineChars(config.telegramCfg),
         }),
       );
+      scheduleReposition();
       if (options.flush) {
         await draftState.answerLane.stream?.flush();
       }
@@ -145,12 +235,17 @@ export function createProgressState(
         }
       : undefined,
     cleanupUndelivered: true,
-    onFinalStarted: () => progressCompositor.markFinalReplyStarted(),
+    onFinalStarted: () => {
+      disposeProgressObserver();
+      progressCompositor.markFinalReplyStarted();
+    },
     onFinalDelivered: () => progressCompositor.markFinalReplyDelivered(),
     onCleanupFailure: (error) =>
       config.runtime.error?.(`telegram preview cleanup failed: ${formatErrorMessage(error)}`),
   });
   return {
+    disposeProgressObserver,
+    resumeProgressObserver,
     verboseProgressActive: () => false,
     progressCompositor,
     previewLifecycle,

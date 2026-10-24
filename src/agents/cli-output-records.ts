@@ -642,12 +642,13 @@ export function parseClaudeCliStreamingDelta(params: {
       : null;
   }
   if (
-    // `--include-partial-messages` marks cumulative assistant snapshots with an explicit null.
+    // Partial snapshots use null; completed pre-tool blocks use tool_use in Claude CLI.
+    // Keep terminal answers in the result lane and preserve suffix deduplication below.
     !isClaudeStreamJsonDialect(params) ||
     params.parsed.type !== "assistant" ||
     isClaudeSubagentRecord(params.parsed) ||
     !isRecord(params.parsed.message) ||
-    params.parsed.message.stop_reason !== null
+    (params.parsed.message.stop_reason !== null && params.parsed.message.stop_reason !== "tool_use")
   ) {
     return null;
   }

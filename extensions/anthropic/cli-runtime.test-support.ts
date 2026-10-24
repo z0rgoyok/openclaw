@@ -18,6 +18,7 @@ let user;
 let privateContext;
 let lateDecision;
 let pendingInputUuid;
+const steeringInputs = [];
 const priorResponses = {};
 let credentialProof;
 let shutdownDescendant;
@@ -84,6 +85,43 @@ for await (const line of createInterface({ input: process.stdin })) {
     turn++;
     user = message.message.content;
     writeFileSync("user.received", user);
+    if (scenario === "steering-tool-running") {
+      steeringInputs.push(message.uuid);
+      if (turn === 1) {
+        send({ type: "system", subtype: "init", capabilities: ["msg_lifecycle_v1"] });
+        send({ ...message, isReplay: true });
+        send({ type: "stream_event", event: { type: "content_block_start", index: 0,
+          content_block: { type: "tool_use", id: "pending-tool", name: "Bash", input: { command: "synthetic pending work" } } } });
+        send({ type: "system", subtype: "fixture_tool_running" });
+      } else {
+        assert.equal(turn, 2, "correction must be written exactly once");
+        send({ ...message, isReplay: true });
+        send({ type: "result", subtype: "success", result: "old answer", user_message_uuids: [steeringInputs[0]] });
+        send({ type: "user", parent_tool_use_id: null, message: { role: "user", content: [
+          { type: "tool_result", tool_use_id: "pending-tool", content: "work completed" },
+        ] } });
+        send({ type: "result", subtype: "success", result: "correction applied after tool", user_message_uuids: steeringInputs });
+      }
+      continue;
+    }
+    if (scenario === "steering" || scenario === "steering-no-receipt") {
+      steeringInputs.push(message.uuid);
+      if (turn === 1) {
+        send({ type: "system", subtype: "init", capabilities: ["msg_lifecycle_v1"] });
+        send({ type: "command_lifecycle", state: "started", command_uuid: "native-command-id" });
+        send({ ...message, isReplay: true });
+        send({ type: "system", subtype: "fixture_steering_ready" });
+      } else if (scenario === "steering") {
+        send({ ...message, isReplay: true });
+        if (turn === 2) {
+          send({ type: "result", subtype: "success", result: "previous answer", user_message_uuids: [steeringInputs[0]] });
+        }
+        if (turn === 3) {
+          send({ type: "result", subtype: "success", result: "both corrections applied", user_message_uuids: steeringInputs });
+        }
+      }
+      continue;
+    }
     if (scenario === "credential-tree") {
       send({ type: "system", subtype: "fixture_credential", pid: process.pid, ...credentialProof });
       continue;

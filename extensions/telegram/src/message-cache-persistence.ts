@@ -8,6 +8,25 @@ import type {
   TelegramPromptContextSource,
 } from "./prompt-context-projection.js";
 
+export function telegramMessageCacheKey(params: {
+  scopeKey: string | undefined;
+  accountId: string;
+  chatId: string | number;
+  messageId: string;
+}) {
+  const key = `${params.accountId}:${params.chatId}:${params.messageId}`;
+  return params.scopeKey ? `${params.scopeKey}:${key}` : key;
+}
+
+export function telegramMessageCacheKeyPrefix(params: {
+  scopeKey: string | undefined;
+  accountId: string;
+  chatId: string | number;
+}) {
+  const prefix = `${params.accountId}:${params.chatId}:`;
+  return params.scopeKey ? `${params.scopeKey}:${prefix}` : prefix;
+}
+
 export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES = 3000;
 export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE = "telegram.message-cache";
 // Versioned writes preserve projection provenance. Shipped unversioned rows
