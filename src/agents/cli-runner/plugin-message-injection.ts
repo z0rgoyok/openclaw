@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type {
   ReplyBackendMessageInjectionV2,
   ReplyBackendQueueMessageOptions,
@@ -102,7 +102,7 @@ export function createCliPluginMessageInjection(params: {
         let dispatched = false;
         const cancelled = createDeferredCore();
         let timer: ReturnType<typeof setTimeout> | undefined;
-        let remainingMs = clampPositiveTimerTimeoutMs(options?.deliveryTimeoutMs ?? 120_000);
+        let remainingMs = resolvePositiveTimerTimeoutMs(options?.deliveryTimeoutMs ?? 120_000, 1);
         let countingSince: number | undefined;
         const refreshReceiptWait = () => {
           if ((params.activeToolCount?.() ?? 0) > 0) {

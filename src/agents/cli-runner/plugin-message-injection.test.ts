@@ -383,8 +383,13 @@ describe("CLI native steering admission", () => {
             input.assertCurrent();
             input.onDispatched();
             const index = sent.push(input.text) - 1;
-            dispatched[index].resolve();
-            await receipts[index].promise;
+            const dispatchedInput = dispatched[index];
+            const receipt = receipts[index];
+            if (!dispatchedInput || !receipt) {
+              throw new Error("Unexpected extra native input.");
+            }
+            dispatchedInput.resolve();
+            await receipt.promise;
             input.assertCurrent();
           });
           yield {
