@@ -1,7 +1,4 @@
-import {
-  hasAuthoredProviderRequestParams,
-  prepareAgentRuntimeAuth,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { prepareAgentRuntimeAuth } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
   resolveAgentDir,
@@ -147,14 +144,6 @@ export async function prepareCodexControlSessionAuth(
     agentDir,
     agentId: sessionAgentId,
     workspaceDir,
-    requestTransportOverrides: hasAuthoredProviderRequestParams({
-      config,
-      provider: model.provider,
-      modelId: model.model,
-      agentId: sessionAgentId,
-    })
-      ? "present"
-      : "none",
     authProfileStore: store,
     sessionAuthProfileId: authProfileId,
     sessionAuthProfileSource: entry?.authProfileOverrideSource,
