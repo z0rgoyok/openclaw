@@ -1034,7 +1034,7 @@ describe("OpenAI provider policy artifact", () => {
     });
   });
 
-  it("selects Codex for the owned local Responses relay only", () => {
+  it("admits explicit Codex on the owned local Responses relay without changing auto", () => {
     const resolve = (baseUrl: string, overrides: "none" | "present" = "none") =>
       resolveModelRoutes({
         provider: "openai",
@@ -1046,7 +1046,7 @@ describe("OpenAI provider policy artifact", () => {
 
     expect(resolve("http://127.0.0.1:2455/v1")).toMatchObject({
       kind: "routes",
-      defaultRuntimeId: "codex",
+      defaultRuntimeId: "openclaw",
       routes: [{ runtimePolicy: { compatibleIds: ["openclaw", "codex", "agentsapi"] } }],
     });
     for (const baseUrl of [

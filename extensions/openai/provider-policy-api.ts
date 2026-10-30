@@ -252,6 +252,16 @@ function defaultRuntimeIdForRoute(
   candidate: ProviderModelRouteCandidate,
   sourceBaseUrl: unknown = candidate.baseUrl,
 ): string {
+  // Preserve the existing automatic runtime for the owned relay; an explicit
+  // Codex selection can still use the compatible prepared Responses route.
+  if (
+    sourceBaseUrl === "http://127.0.0.1:2455/v1" &&
+    candidate.baseUrl === sourceBaseUrl &&
+    candidate.api === OPENAI_RESPONSES_API &&
+    candidate.requestTransportOverrides === "none"
+  ) {
+    return OPENAI_AGENT_RUNTIME_ID;
+  }
   return codexCanReproduceRoute(candidate, sourceBaseUrl)
     ? CODEX_AGENT_RUNTIME_ID
     : OPENAI_AGENT_RUNTIME_ID;

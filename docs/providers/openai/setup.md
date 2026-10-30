@@ -46,13 +46,12 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
     | `openai/gpt-5.6` | unset/`auto`, exact official HTTPS native route, no request override | Codex may be selected     | Ordered API-key auth profile      |
     | `openai/gpt-5.6` | provider/model `agentRuntime.id: "openclaw"`                  | OpenClaw embedded runtime | Selected `openai` API-key profile |
     | `openai/gpt-5.5` | explicit provider/model `agentRuntime.id`                     | Selected agent runtime    | Selected OpenAI API-key profile   |
-    | `openai/*`       | authored Completions, other custom endpoints, or request override | OpenClaw embedded runtime | Credential type remains unchanged |
+    | `openai/*`       | authored Completions, custom, or request override | OpenClaw embedded runtime | Credential type remains unchanged |
     | `openai/*`       | plaintext official HTTP endpoint                  | Rejected                 | Credential is not sent             |
 
     <Note>
-    With runtime unset or `auto`, an eligible exact official HTTPS native route
-    or the exact `http://127.0.0.1:2455/v1` OpenAI Responses route without
-    request overrides may select the Codex app-server harness implicitly. For API-key auth
+    With runtime unset or `auto`, only an eligible exact official HTTPS native
+    route may select the Codex app-server harness implicitly. For API-key auth
     on an agent model, create an `openai` API-key auth profile and order it with
     `auth.order.openai`; `OPENAI_API_KEY` remains the direct fallback for
     non-agent OpenAI API surfaces. Run `openclaw doctor --fix` to migrate older
@@ -151,7 +150,7 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
     | `openai/gpt-5.6-luna`    | unset/`auto`, exact official HTTPS native route, no request override | Codex may be selected                                    | Codex sign-in when the catalog exposes Luna        |
     | `openai/gpt-6-astra`     | provider/model `agentRuntime.id: "openclaw"`                  | OpenClaw embedded runtime, internal Codex-auth transport | Selected `openai` OAuth profile                    |
     | `openai/gpt-5.5`         | explicit provider/model `agentRuntime.id`                     | Selected agent runtime                                   | Selected OpenAI auth profile                       |
-    | `openai/*`               | authored Completions, other custom endpoints, or request override | OpenClaw embedded runtime                                | Credential requirement remains route-specific      |
+    | `openai/*`               | authored Completions, custom, or request override | OpenClaw embedded runtime                                | Credential requirement remains route-specific      |
     | `openai/*`               | plaintext official HTTP endpoint                  | Rejected                                                 | Credential is not sent                              |
     | Legacy Codex GPT-5.5 ref | repaired by doctor                                            | Rewritten to `openai/gpt-5.5`                            | Migrated OpenAI OAuth profile                      |
     | `codex-cli/gpt-5.5`      | repaired by doctor                                            | Rewritten to `openai/gpt-5.5`                            | Codex app-server auth                              |

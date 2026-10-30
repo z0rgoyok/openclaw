@@ -305,6 +305,49 @@ describe("Codex command RPC helpers", () => {
     );
   });
 
+  it("passes the admitted local Responses route to the control client", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "synthetic-control-key");
+    config.models = {
+      providers: {
+        openai: { baseUrl: "http://127.0.0.1:2455/v1", api: "openai-responses", models: [] },
+      },
+    };
+    await resume();
+    expect(acquiredOptions().preparedModelRoute).toMatchObject({
+      provider: "openai",
+      baseUrl: "http://127.0.0.1:2455/v1",
+      api: "openai-responses",
+      runtimePolicy: { compatibleIds: expect.arrayContaining(["codex"]) },
+    });
+  });
+
+  it("refuses a custom Responses route that does not admit Codex", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "synthetic-control-key");
+    config.models = {
+      providers: {
+        openai: { baseUrl: "http://127.0.0.1:2456/v1", api: "openai-responses", models: [] },
+      },
+    };
+    await expect(resume()).rejects.toThrow("incompatible prepared model route");
+    expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses the local route when authored transport headers make it incompatible", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "synthetic-control-key");
+    config.models = {
+      providers: {
+        openai: {
+          baseUrl: "http://127.0.0.1:2455/v1",
+          api: "openai-responses",
+          headers: { "x-test": "synthetic" },
+          models: [],
+        },
+      },
+    };
+    await expect(resume()).rejects.toThrow("incompatible prepared model route");
+    expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
+  });
+
   it.each(["oauth", "token"] as const)(
     "keeps %s subscription routing and rotates an automatic profile past cooldown",
     async (type) => {

@@ -24,9 +24,8 @@ Keep provider refs and runtime policy separate:
 
 - Use `openai/gpt-*` for canonical OpenAI model selection. The prefix alone
   never selects Codex.
-- With runtime unset or `auto`, an exact official HTTPS Platform Responses,
-  ChatGPT Responses, or `http://127.0.0.1:2455/v1` OpenAI Responses route
-  with no authored provider request override may
+- With runtime unset or `auto`, only an exact official HTTPS Platform Responses
+  or ChatGPT Responses route with no authored provider request override may
   select Codex implicitly. Valid model-scoped Fast-mode and cutoff controls do
   not count as authored request params.
 - Do not use legacy Codex GPT refs in config; run `openclaw doctor --fix` to
@@ -218,9 +217,9 @@ through OpenClaw.
 
 ### Configured Responses gateways
 
-Codex can use the exact operator-configured API-key Responses gateway
-`http://127.0.0.1:2455/v1` without transport overrides. Other custom endpoints
-remain on the OpenClaw runtime. Use the canonical
+An explicitly selected Codex runtime can use the exact operator-configured API-key
+Responses gateway `http://127.0.0.1:2455/v1` without transport overrides.
+Automatic selection and other custom endpoints remain on OpenClaw. Use the canonical
 `openai` provider, an explicit `openai-responses` adapter, and the default managed
 local app-server with its isolated agent home:
 
@@ -237,7 +236,7 @@ existing bounded-turn behavior.
     providers: {
       openai: {
         api: "openai-responses",
-        baseUrl: "http://192.168.20.10:8317/v1",
+        baseUrl: "http://127.0.0.1:2455/v1",
         apiKey: { source: "env", provider: "default", id: "CUSTOM_RESPONSES_API_KEY" },
         agentRuntime: { id: "codex" },
         models: [

@@ -28,8 +28,8 @@ title: "Quick rules"
     OpenAI model refs and agent runtimes are separate:
 
     - `openai/<model>` selects the canonical OpenAI provider and model. The prefix alone never selects Codex.
-    - With provider/model runtime policy unset or `auto`, OpenAI may select Codex implicitly for an exact official HTTPS Platform Responses, ChatGPT Responses, or `http://127.0.0.1:2455/v1` OpenAI Responses route with no authored provider request override. Valid model-scoped Fast-mode controls do not count as authored request params.
-    - Authored Completions adapters, other custom endpoints, and routes with authored request behavior stay on OpenClaw. Plaintext official HTTP endpoints are rejected.
+    - With provider/model runtime policy unset or `auto`, OpenAI may select Codex implicitly only for an exact official HTTPS Platform Responses or ChatGPT Responses route with no authored provider request override. Valid model-scoped Fast-mode controls do not count as authored request params.
+    - Authored Completions adapters, custom endpoints, and routes with authored request behavior stay on OpenClaw. Plaintext official HTTP endpoints are rejected.
     - legacy Codex model refs are legacy config that doctor rewrites to `openai/<model>`.
     - Provider/model `agentRuntime.id: "openclaw"` explicitly keeps an otherwise eligible route on OpenClaw. `agentRuntime.id: "codex"` requires Codex and fails closed when the effective route is not Codex-compatible.
 

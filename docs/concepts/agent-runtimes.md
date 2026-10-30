@@ -59,8 +59,7 @@ These surfaces are intentionally independent. Enabling the `codex` plugin
 makes native app-server features available; `openclaw doctor --fix` owns
 legacy Codex route repair and stale session pin cleanup. Automatic Codex
 selection requires a compatible effective route: an exact official HTTPS
-Platform Responses or ChatGPT Responses endpoint, or the exact
-`http://127.0.0.1:2455/v1` OpenAI Responses route, without authored request
+Platform Responses or ChatGPT Responses endpoint without authored request
 overrides. The `openai/*` prefix alone does not select Codex.
 
 The common ChatGPT/Codex subscription setup uses Codex OAuth for auth, but
@@ -230,7 +229,7 @@ they run through the Codex app-server harness instead of preserving a Codex
 CLI backend.
 
 For OpenAI agent models, unset runtime and `auto` can select Codex when the
-provider-owned effective route declares it compatible. Other custom endpoints,
+provider-owned effective route declares it compatible. Custom endpoints,
 Completions adapters, and authored request overrides stay on OpenClaw rather
 than losing their transport settings. Explicit `agentRuntime.id: "openclaw"`
 also keeps the built-in runtime available; with a selected `openai` OAuth

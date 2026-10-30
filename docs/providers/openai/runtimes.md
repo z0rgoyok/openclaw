@@ -27,11 +27,14 @@ endpoint and adapter:
 | Effective route facts                                                                                                                                                           | Implicit runtime      |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
 | Exact official Platform HTTPS endpoint with `openai-responses`, or exact official ChatGPT HTTPS endpoint with `openai-chatgpt-responses`; no authored provider request override | Codex may be selected |
-| Exact `http://127.0.0.1:2455/v1` endpoint with `openai-responses`; no authored provider request override                                                                        | Codex may be selected |
 | Authored `openai-completions` adapter                                                                                                                                           | OpenClaw              |
-| Other custom endpoints                                                                                                                                                          | OpenClaw              |
+| Custom endpoint                                                                                                                                                                 | OpenClaw              |
 | Explicit exact official endpoint using HTTP                                                                                                                                     | Rejected              |
 | Route with an authored provider/model request override                                                                                                                          | OpenClaw              |
+
+For the exact `http://127.0.0.1:2455/v1` endpoint using `openai-responses`
+without request overrides, an explicit `agentRuntime.id: "codex"` is supported.
+The implicit runtime remains OpenClaw.
 
 Valid model-scoped `params.fastMode` / `params.fast_mode`, cutoff, and `thinking`
 values are typed agent-runtime controls, not authored provider request params.
@@ -231,7 +234,7 @@ OpenClaw can continue the existing session after a transient provider failure.
 ## Native Codex app-server auth
 
 The native Codex app-server harness uses `openai/*` model refs when an eligible
-official HTTPS route or the exact local Responses relay selects it implicitly, or when provider/model
+exact official HTTPS route selects it implicitly, or when provider/model
 `agentRuntime.id: "codex"` selects it explicitly. Its auth is still
 account-based. OpenClaw selects auth in this order:
 
