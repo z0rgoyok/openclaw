@@ -1047,7 +1047,7 @@ describe("OpenAI provider policy artifact", () => {
     expect(resolve("http://127.0.0.1:2455/v1")).toMatchObject({
       kind: "routes",
       defaultRuntimeId: "openclaw",
-      routes: [{ runtimePolicy: { compatibleIds: ["openclaw", "codex", "agentsapi"] } }],
+      routes: [{ runtimePolicy: { compatibleIds: ["openclaw", "codex"] } }],
     });
     for (const baseUrl of [
       "http://127.0.0.1:2456/v1",

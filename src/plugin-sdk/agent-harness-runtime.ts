@@ -230,6 +230,7 @@ export { isHostScopedAgentToolActive } from "../agents/agent-tools.ring-zero-con
 export { log as embeddedAgentLog } from "../agents/embedded-agent-runner/logger.js";
 export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
 export { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
+export { hasAuthoredProviderRequestParams } from "../agents/model-extra-params.js";
 export { classifyEmbeddedAgentRunResultForModelFallback } from "../agents/embedded-agent-runner/result-fallback-classifier.js";
 export { resolveUserPath } from "../utils.js";
 export { callGatewayTool, readGatewayToolOperatorScopes } from "../agents/tools/gateway.js";

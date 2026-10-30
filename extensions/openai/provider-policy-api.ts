@@ -240,7 +240,7 @@ function withRuntimePolicy(
     ...candidate,
     runtimePolicy: {
       compatibleIds: codexCanReproduceRoute(candidate, sourceBaseUrl)
-        ? candidate.authRequirement === "api-key"
+        ? candidate.authRequirement === "api-key" && sourceBaseUrl !== "http://127.0.0.1:2455/v1"
           ? [...CODEX_RUNTIME_COMPATIBLE_IDS, "agentsapi"]
           : CODEX_RUNTIME_COMPATIBLE_IDS
         : OPENCLAW_RUNTIME_COMPATIBLE_IDS,
