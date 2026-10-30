@@ -1033,4 +1033,48 @@ describe("OpenAI provider policy artifact", () => {
       routes: [{ authRequirement: "api-key" }],
     });
   });
+
+  it("admits explicit Codex on the owned local Responses relay without changing auto", () => {
+    const resolve = (baseUrl: string, overrides: "none" | "present" = "none") =>
+      resolveModelRoutes({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        configuredProvider: { api: "openai-responses", baseUrl },
+        requestTransportOverrides: overrides,
+        routeIntent: { authRequirement: "api-key", source: "explicit" },
+      });
+
+    expect(resolve("http://127.0.0.1:2455/v1")).toMatchObject({
+      kind: "routes",
+      defaultRuntimeId: "openclaw",
+      routes: [{ runtimePolicy: { compatibleIds: ["openclaw", "codex"] } }],
+    });
+    for (const baseUrl of [
+      "http://127.0.0.1:2456/v1",
+      "http://localhost:2455/v1",
+      "http://127.0.0.1:2455/other",
+      "http://127.0.0.1:2455/v1?other=true",
+      "http://127.0.0.1:2455/v1#other",
+      "https://relay.example.test/v1",
+    ]) {
+      expect(resolve(baseUrl)).toMatchObject({
+        kind: "routes",
+        defaultRuntimeId: "openclaw",
+        routes: [{ runtimePolicy: { compatibleIds: ["openclaw"] } }],
+      });
+    }
+    expect(resolve("http://127.0.0.1:2455/v1", "present")).toMatchObject({
+      kind: "routes",
+      defaultRuntimeId: "openclaw",
+      routes: [{ runtimePolicy: { compatibleIds: ["openclaw"] } }],
+    });
+    expect(
+      resolveModelRoutes({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        configuredProvider: { api: "openai-completions", baseUrl: "http://127.0.0.1:2455/v1" },
+        routeIntent: { authRequirement: "api-key", source: "explicit" },
+      }),
+    ).toMatchObject({ kind: "routes", defaultRuntimeId: "openclaw" });
+  });
 });

@@ -305,6 +305,93 @@ describe("Codex command RPC helpers", () => {
     );
   });
 
+  it("passes the admitted local Responses route to the control client", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "synthetic-control-key");
+    config.models = {
+      providers: {
+        openai: { baseUrl: "http://127.0.0.1:2455/v1", api: "openai-responses", models: [] },
+      },
+    };
+    await resume();
+    expect(acquiredOptions().preparedModelRoute).toMatchObject({
+      provider: "openai",
+      baseUrl: "http://127.0.0.1:2455/v1",
+      api: "openai-responses",
+      runtimePolicy: { compatibleIds: expect.arrayContaining(["codex"]) },
+    });
+  });
+
+  it("refuses a custom Responses route that does not admit Codex", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "synthetic-control-key");
+    config.models = {
+      providers: {
+        openai: { baseUrl: "http://127.0.0.1:2456/v1", api: "openai-responses", models: [] },
+      },
+    };
+    await expect(resume()).rejects.toThrow("incompatible prepared model route");
+    expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses the local route when authored transport headers make it incompatible", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "synthetic-control-key");
+    config.models = {
+      providers: {
+        openai: {
+          baseUrl: "http://127.0.0.1:2455/v1",
+          api: "openai-responses",
+          headers: { "x-test": "synthetic" },
+          models: [],
+        },
+      },
+    };
+    await expect(resume()).rejects.toThrow("incompatible prepared model route");
+    expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["defaults", { defaults: { params: { temperature: 0.3 } } }],
+    [
+      "default model",
+      { defaults: { models: { "openai/gpt-5.5": { params: { temperature: 0.3 } } } } },
+    ],
+    ["agent", { list: [{ id: "main", params: { temperature: 0.3 } }] }],
+    [
+      "agent model",
+      { list: [{ id: "main", models: { "openai/gpt-5.5": { params: { temperature: 0.3 } } } }] },
+    ],
+  ])("refuses control with authored %s request parameters", async (_scope, agents) => {
+    vi.stubEnv("OPENAI_API_KEY", "synthetic-control-key");
+    config.agents = {
+      ...config.agents,
+      ...agents,
+      defaults: { ...config.agents?.defaults, ...("defaults" in agents ? agents.defaults : {}) },
+    } as OpenClawConfig["agents"];
+    config.models = {
+      providers: {
+        openai: { baseUrl: "http://127.0.0.1:2455/v1", api: "openai-responses", models: [] },
+      },
+    };
+    await expect(resume()).rejects.toThrow("incompatible prepared model route");
+    expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
+  });
+
+  it("permits typed runtime controls in model parameters", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "synthetic-control-key");
+    config.agents = {
+      defaults: {
+        model: { primary: "openai/gpt-5.5" },
+        models: { "openai/gpt-5.5": { params: { thinking: "high", fastMode: true } } },
+      },
+    };
+    config.models = {
+      providers: {
+        openai: { baseUrl: "http://127.0.0.1:2455/v1", api: "openai-responses", models: [] },
+      },
+    };
+    await resume();
+    expect(acquiredOptions().preparedModelRoute?.runtimePolicy?.compatibleIds).toContain("codex");
+  });
+
   it.each(["oauth", "token"] as const)(
     "keeps %s subscription routing and rotates an automatic profile past cooldown",
     async (type) => {

@@ -1,9 +1,14 @@
+import { parse as parseToml } from "smol-toml";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
+import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import type { CodexDesktopGeneration } from "./desktop-generation-owner.js";
 import { prepareCodexInferenceThreadConfig } from "./inference-routing.js";
+import { readCodexAppServerConfigOptions } from "./launch-args.js";
+import { buildCodexPreparedResponsesProvider } from "./prepared-responses-route.js";
 import {
   getLeasedSharedCodexAppServerClient,
+  getSharedCodexAppServerClient,
   readCodexAppServerClientDesktopGeneration,
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
@@ -12,12 +17,85 @@ import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 /** Registers startup qualification under the suite's shared auth and generation fixtures. */
 export function registerSharedClientInferenceTests(
-  configureNativeStart: (generation: CodexDesktopGeneration, command: string) => void,
+  fixtures: {
+    desktopGeneration?: CodexDesktopGeneration;
+    resolveManagedCodexAppServerStartOptions: {
+      mockImplementation(
+        implementation: (start: CodexAppServerStartOptions) => Promise<CodexAppServerStartOptions>,
+      ): unknown;
+    };
+  },
   sendInitializeResult: (
     harness: ReturnType<typeof createClientHarness>,
     userAgent: string,
   ) => Promise<void>,
+  createInitializingClientHarness: () => ReturnType<typeof createClientHarness>,
 ): void {
+  const configureNativeStart = (generation: CodexDesktopGeneration, command: string) => {
+    fixtures.desktopGeneration = generation;
+    fixtures.resolveManagedCodexAppServerStartOptions.mockImplementation(async (options) =>
+      options.transport === "stdio" && options.commandSource === "managed"
+        ? { ...options, command, commandSource: "resolved-managed" }
+        : options,
+    );
+  };
+  it("pins a custom Responses provider before cold initialize and separates exact upstream clients", async () => {
+    const first = createInitializingClientHarness();
+    const second = createInitializingClientHarness();
+    const reconnect = createInitializingClientHarness();
+    const starts = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockResolvedValueOnce(first.client)
+      .mockResolvedValueOnce(second.client)
+      .mockResolvedValueOnce(reconnect.client);
+    const options = (baseUrl: string) => ({
+      timeoutMs: 1000,
+      preparedAuth: { kind: "api-key" as const, apiKey: "synthetic-proxy-key" },
+      preparedModelRoute: {
+        api: "openai-responses" as const,
+        baseUrl,
+        authRequirement: "api-key" as const,
+        requestTransportOverrides: "none" as const,
+      },
+    });
+    const firstOptions = options("http://llm.proxy:8080/v1");
+    await expect(getSharedCodexAppServerClient(firstOptions)).resolves.toBe(first.client);
+    const start = starts.mock.calls[0]?.[0];
+    if (!start?.args) {
+      throw new Error("Expected cold native startup");
+    }
+    const overrides = readCodexAppServerConfigOptions(start.args)
+      .filter(({ name }) => name === "-c" || name === "--config")
+      .map(({ value }) => parseToml(value ?? ""));
+    const providerId = overrides.find(
+      (override) => typeof override.model_provider === "string",
+    )?.model_provider;
+    if (typeof providerId !== "string") {
+      throw new Error("Missing physical provider ID");
+    }
+    expect(overrides).toContainEqual({ features: { api_key_model_discovery: false } });
+    expect(providerId).toMatch(/^openclaw-prepared-responses-[0-9a-f-]{36}$/);
+    expect(overrides).toContainEqual({
+      model_providers: {
+        [providerId]: buildCodexPreparedResponsesProvider(firstOptions.preparedModelRoute.baseUrl),
+      },
+    });
+    expect(start.args.join(" ")).not.toContain("synthetic-proxy-key");
+    const secondOptions = options("http://llm.proxy:8081/v1");
+    await expect(getSharedCodexAppServerClient(secondOptions)).resolves.toBe(second.client);
+    await expect(getSharedCodexAppServerClient(secondOptions)).resolves.toBe(second.client);
+    expect(starts).toHaveBeenCalledTimes(2);
+    await first.client.closeAndWait();
+    await expect(getSharedCodexAppServerClient(firstOptions)).resolves.toBe(reconnect.client);
+    expect(starts).toHaveBeenCalledTimes(3);
+    const reconnectStart = starts.mock.calls[2]?.[0];
+    if (!reconnectStart?.args) {
+      throw new Error("Missing physical reconnect");
+    }
+    expect(reconnectStart.args.join(" ")).not.toContain(providerId);
+    expect(reconnectStart.args.join(" ")).toContain(firstOptions.preparedModelRoute.baseUrl);
+  });
+
   it.each([
     {
       label: "managed Desktop",

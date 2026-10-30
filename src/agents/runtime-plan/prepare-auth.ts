@@ -29,6 +29,7 @@ import {
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth-provider-config.js";
 import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
+import { hasAuthoredProviderRequestParams } from "../model-extra-params.js";
 import { resolveDefaultModelForAgent } from "../model-selection-config.js";
 import { resolveOpenAIModelRoutes, selectOpenAIModelRouteAuth } from "../openai-model-routes.js";
 import {
@@ -500,7 +501,16 @@ export function prepareAgentRuntimeAuth(
       pinnedSource?.kind === "profile" ? pinnedSource.authRequirement : undefined,
     ),
     env: params.env,
-    requestTransportOverrides: params.requestTransportOverrides,
+    requestTransportOverrides:
+      params.requestTransportOverrides === "present" ||
+      hasAuthoredProviderRequestParams({
+        config: params.config,
+        provider: params.provider,
+        modelId: params.modelId,
+        agentId: params.agentId,
+      })
+        ? "present"
+        : params.requestTransportOverrides,
   });
   if (!resolution || resolution.kind === "indeterminate") {
     const sourceDecision = selectProviderModelAuthSources({

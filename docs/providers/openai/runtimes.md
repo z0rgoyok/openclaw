@@ -32,6 +32,10 @@ endpoint and adapter:
 | Explicit exact official endpoint using HTTP                                                                                                                                     | Rejected              |
 | Route with an authored provider/model request override                                                                                                                          | OpenClaw              |
 
+For the exact `http://127.0.0.1:2455/v1` endpoint using `openai-responses`
+without request overrides, an explicit `agentRuntime.id: "codex"` is supported.
+The implicit runtime remains OpenClaw.
+
 Valid model-scoped `params.fastMode` / `params.fast_mode`, cutoff, and `thinking`
 values are typed agent-runtime controls, not authored provider request params.
 Affirmative reasoning support and native reasoning-effort metadata also preserve

@@ -25,6 +25,7 @@ import {
   type CodexInferenceModelExecution,
   type CodexInferenceModelRequest,
 } from "./inference-dispatch.js";
+import { resolveCodexInferenceUpstreamPolicy } from "./inference-prepared-route.js";
 import {
   OVERLOAD_BODY,
   OVERLOAD_HEADERS,
@@ -37,6 +38,7 @@ import {
   MAX_PENDING_REQUESTS,
   MAX_UPLOADS,
 } from "./inference-upload.js";
+import type { CodexPreparedResponsesRoute } from "./prepared-responses-route.js";
 import type { CodexResponsesOAuth } from "./responses-oauth.js";
 
 export { CodexInferenceAuthorizationError } from "./inference-dispatch.js";
@@ -62,6 +64,8 @@ export async function createCodexInferenceProxy(params: {
   upstream: URL;
   assertCurrent: () => void;
   oauth?: CodexResponsesOAuth;
+  /** Host-owned fixed route; native config and request metadata cannot grant private access. */
+  preparedResponsesRoute?: CodexPreparedResponsesRoute;
   preserveAzureUrlFeatures?: boolean;
   preserveCodexBackendRoutes?: boolean;
   bindModelExecution?: (
@@ -69,12 +73,12 @@ export async function createCodexInferenceProxy(params: {
   ) => Promise<CodexInferenceModelExecution> | CodexInferenceModelExecution;
 }) {
   const upstream = new URL(params.upstream);
-  if (upstream.protocol !== "https:" || upstream.username || upstream.password || upstream.hash) {
-    throw new Error("Codex inference requires a credential-free HTTPS upstream URL");
-  }
-  if (params.oauth && upstream.href.replace(/\/$/, "") !== "https://api.openai.com/v1") {
-    throw new Error("ChatGPT subscription sharing requires the public Responses endpoint");
-  }
+  const preparedResponsesRoute = params.preparedResponsesRoute;
+  const preparedPolicy = resolveCodexInferenceUpstreamPolicy(
+    upstream,
+    preparedResponsesRoute,
+    Boolean(params.oauth),
+  );
   const lifetime = new AbortController();
   const assertCurrent = () => {
     lifetime.signal.throwIfAborted();
@@ -185,7 +189,7 @@ export async function createCodexInferenceProxy(params: {
     if (
       request.headers.origin ||
       !request.url?.startsWith(pathPrefix + "/") ||
-      isBlockedHostnameOrIp(upstream.hostname)
+      (!preparedResponsesRoute && isBlockedHostnameOrIp(upstream.hostname))
     ) {
       throw new Error(FAILURE);
     }
@@ -303,7 +307,8 @@ export async function createCodexInferenceProxy(params: {
             signal: upload.signal,
             // Refresh and DNS/proxy preparation await; revalidate both owners at physical I/O.
             beforeRequest: assertAuthorized,
-            requireHttps: true,
+            requireHttps: upstream.protocol === "https:",
+            ...(preparedPolicy ? { policy: preparedPolicy } : {}),
             maxRedirects: 0,
             capture: false,
             mode: "trusted_env_proxy",
@@ -419,7 +424,7 @@ export async function createCodexInferenceProxy(params: {
       const failHandshake = () => finish(Date.now() >= deadlineAtMs ? 504 : 502);
       try {
         const { target, sampling, path } = resolveTarget(req);
-        if (params.oauth) {
+        if (params.oauth || preparedResponsesRoute) {
           throw new Error(FAILURE);
         }
         if (!sampling && path !== "/guardian" && path !== "/guardian-classifier") {

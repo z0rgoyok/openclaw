@@ -1,6 +1,7 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
@@ -8,6 +9,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { createOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
+  captureNativeSessionGenerationAuthority,
   reclaimNativeSessionGeneration,
   resolveNativeSessionBinding,
   type NativeSessionGenerationOperations,
@@ -34,6 +36,34 @@ describe("native session binding generation", () => {
     });
     onTestFinished(() => fixture.cleanup());
     storePath = path.join(fixture.stateDir, "sessions.json");
+  });
+
+  it("revalidates lineage without loading cold prompt snapshots", async () => {
+    const savedPrompt = "saved prompt ".repeat(40_000);
+    const skillsSnapshot = { prompt: savedPrompt, skills: [] };
+    await upsertSessionEntryCore(scope(), {
+      sessionId: target.sessionId,
+      updatedAt: 1,
+      skillsSnapshot,
+    });
+    const queries = observeHostDataSql();
+    try {
+      const authority = captureNativeSessionGenerationAuthority({
+        target,
+        storePath,
+        createSupersededError,
+      });
+      expect(authority.state).toBe("current");
+      for (let index = 0; index < 8; index++) {
+        authority.assertCurrent();
+      }
+      const entryReads = queries.queries.filter((sql) => /from\s+"session_nodes"/i.test(sql));
+      expect(entryReads.length).toBeGreaterThanOrEqual(9);
+      expect(queries.queries.every((sql) => !/session_entry_snapshots/i.test(sql))).toBe(true);
+    } finally {
+      queries.restore();
+    }
+    expect(loadSessionEntryReadOnly(scope())?.skillsSnapshot).toEqual(skillsSnapshot);
   });
 
   it("fences an already-readable binding when its admitted session generation rotates", async () => {

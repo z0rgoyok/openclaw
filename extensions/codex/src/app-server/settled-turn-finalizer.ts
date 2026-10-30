@@ -70,6 +70,7 @@ export async function runCodexSettledTurnFinalization(
     modelProvider: selection.modelProvider,
     ...authSelection,
     authRequirement,
+    preparedModelRoute: hostAuthPlan?.modelRoute,
     timeoutMs: attempt.runTimeoutOverrideMs ?? attempt.timeoutMs,
     signal: attempt.abortSignal,
     agentDir: attempt.agentDir,

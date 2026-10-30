@@ -142,6 +142,7 @@ export async function prepareCodexControlSessionAuth(
     modelId: model.model,
     config,
     agentDir,
+    agentId: sessionAgentId,
     workspaceDir,
     authProfileStore: store,
     sessionAuthProfileId: authProfileId,
@@ -150,6 +151,9 @@ export async function prepareCodexControlSessionAuth(
     harnessAuthBootstrap: "harness",
   });
   const route = plan.modelRoute;
+  if (route && !route.runtimePolicy?.compatibleIds.includes("codex")) {
+    throw new Error("Codex control cannot use an incompatible prepared model route.");
+  }
   // A control subscription must use the same prepared auth partition as a turn.
   // Unsubscribe leaves Codex's native writer loaded for 30 minutes; another
   // process cannot resume that thread, even after its OpenClaw binding is gone.
@@ -201,6 +205,7 @@ export async function prepareCodexControlSessionAuth(
         ? { preparedAuth: handoff.preparedAuth }
         : { authProfileId: handoff.authProfileId }),
       authRequirement: route?.authRequirement,
+      preparedModelRoute: route,
       authProfileStore: binding?.authProfileStore ?? store,
       authBindingFingerprint: binding?.fingerprint,
       agentDir,

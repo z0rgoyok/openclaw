@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -132,6 +133,64 @@ describe("Codex app-server model catalog", () => {
       "agent",
     );
     expect(probeCodexNativeAuth).not.toHaveBeenCalled();
+  });
+
+  it.each(["provider", "model", "environment"])(
+    "does not start native discovery for an authored custom %s endpoint",
+    async (source) => {
+      const baseUrl = "http://llm.proxy:8080/v1";
+      if (source === "environment") {
+        vi.stubEnv("OPENAI_BASE_URL", baseUrl);
+      }
+      const config: OpenClawConfig =
+        source === "environment"
+          ? {}
+          : {
+              models: {
+                providers: {
+                  openai: {
+                    api: "openai-responses",
+                    baseUrl: source === "provider" ? baseUrl : "https://api.openai.com/v1",
+                    models: [
+                      {
+                        id: "synthetic",
+                        name: "Synthetic",
+                        reasoning: false,
+                        input: ["text"],
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                        contextWindow: 200_000,
+                        maxTokens: 8_000,
+                        ...(source === "model" ? { baseUrl } : {}),
+                      },
+                    ],
+                  },
+                },
+              },
+            };
+      expect(await owner.load({ ...catalogParams, config }, undefined)).toEqual([]);
+      expect(withCodexAppServerJsonClient).not.toHaveBeenCalled();
+      expect(probeCodexNativeAuth).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "https://api.openai.com:8443/custom",
+    "http://api.openai.com/v1",
+    "https://api.openai.com/custom",
+    "https://chatgpt.com/custom",
+  ])("does not replace an authored custom route on an official hostname: %s", async (baseUrl) => {
+    vi.stubEnv("OPENAI_BASE_URL", baseUrl);
+    expect(await owner.load(catalogParams, undefined)).toEqual([]);
+    expect(withCodexAppServerJsonClient).not.toHaveBeenCalled();
+  });
+
+  it("handles a partial authored provider row before deciding discovery ownership", async () => {
+    const config = JSON.parse(
+      '{"models":{"providers":{"openai":{"baseUrl":"http://llm.proxy/v1"}}}}',
+    );
+    // Discovery receives manifest/config projections before model rows are populated.
+    expect(await owner.load({ ...catalogParams, config }, undefined)).toEqual([]);
+    expect(withCodexAppServerJsonClient).not.toHaveBeenCalled();
   });
 
   it("returns no rows without a live call when discovery is disabled", async () => {

@@ -585,6 +585,7 @@ export function activateCodexAttemptTurn(
     supportsTranscriptCommitWait: true,
     supportsQueueMessageImages: params.model.input.includes("image"),
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    terminalReplyExpectation: params.terminalReplyExpectation,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     cancel: () => abortExplicitly("cancelled"),
     abort: () => abortExplicitly("aborted"),
