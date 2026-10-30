@@ -214,8 +214,16 @@ function codexCanReproduceRoute(
 ): boolean {
   // Official HTTP ChatGPT input normalizes to the native HTTPS candidate. Retain the source
   // protocol here so normalization cannot silently make an unreproducible route Codex-compatible.
-  if (isHttpBaseUrl(sourceBaseUrl) || candidate.requestTransportOverrides === "present") {
+  const ownedLocalRelay =
+    sourceBaseUrl === "http://127.0.0.1:2455/v1" && candidate.baseUrl === sourceBaseUrl;
+  if (
+    (!ownedLocalRelay && isHttpBaseUrl(sourceBaseUrl)) ||
+    candidate.requestTransportOverrides === "present"
+  ) {
     return false;
+  }
+  if (ownedLocalRelay) {
+    return candidate.api === OPENAI_RESPONSES_API;
   }
   const endpointKind = classifyOpenAIBaseUrl(candidate.baseUrl);
   return (
