@@ -59,7 +59,7 @@ describe("native session binding generation", () => {
       }
       const entryReads = queries.queries.filter((sql) => /from\s+"session_nodes"/i.test(sql));
       expect(entryReads.length).toBeGreaterThanOrEqual(9);
-      expect(entryReads.every((sql) => !/session_entry_snapshots/i.test(sql))).toBe(true);
+      expect(queries.queries.every((sql) => !/session_entry_snapshots/i.test(sql))).toBe(true);
     } finally {
       queries.restore();
     }

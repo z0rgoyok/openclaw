@@ -1053,12 +1053,20 @@ describe("OpenAI provider policy artifact", () => {
       "http://127.0.0.1:2456/v1",
       "http://localhost:2455/v1",
       "http://127.0.0.1:2455/other",
+      "http://127.0.0.1:2455/v1?other=true",
+      "http://127.0.0.1:2455/v1#other",
+      "https://relay.example.test/v1",
     ]) {
-      expect(resolve(baseUrl)).toMatchObject({ kind: "routes", defaultRuntimeId: "openclaw" });
+      expect(resolve(baseUrl)).toMatchObject({
+        kind: "routes",
+        defaultRuntimeId: "openclaw",
+        routes: [{ runtimePolicy: { compatibleIds: ["openclaw"] } }],
+      });
     }
     expect(resolve("http://127.0.0.1:2455/v1", "present")).toMatchObject({
       kind: "routes",
       defaultRuntimeId: "openclaw",
+      routes: [{ runtimePolicy: { compatibleIds: ["openclaw"] } }],
     });
     expect(
       resolveModelRoutes({
