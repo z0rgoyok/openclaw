@@ -25,9 +25,10 @@ sidebarTitle: "Models CLI"
 
 A model ref (`provider/model`) chooses a provider and model, not the low-level
 agent runtime. With runtime policy unset or `auto`, OpenAI's provider-owned
-route policy may select Codex only for an exact official HTTPS Platform
-Responses or ChatGPT Responses route with no authored request override. The
-`openai/*` prefix alone never selects Codex. Completions adapters, custom
+route policy may select Codex for an exact official HTTPS Platform
+Responses or ChatGPT Responses route, or the exact `http://127.0.0.1:2455/v1`
+OpenAI Responses route, with no authored request override. The
+`openai/*` prefix alone never selects Codex. Completions adapters, other custom
 endpoints, and authored request behavior stay on OpenClaw. Plaintext official
 HTTP endpoints are rejected. See [OpenAI implicit agent runtime](/providers/openai/runtimes#implicit-agent-runtime).
 

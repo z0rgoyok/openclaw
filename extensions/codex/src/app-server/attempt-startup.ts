@@ -94,6 +94,7 @@ export async function startCodexAttemptThread(params: {
   computerUseConfig: ResolvedCodexComputerUseConfig;
   startupAuthProfileId: string | null | undefined;
   startupAuthRequirement?: CodexAppServerClientOptions["authRequirement"];
+  startupModelRoute?: CodexAppServerClientOptions["preparedModelRoute"];
   startupAuthBindingFingerprint: string | undefined;
   runtimeArtifactRequest?: Readonly<{
     expected?: AgentHarnessRuntimeArtifactBinding;
@@ -219,6 +220,7 @@ export async function startCodexAttemptThread(params: {
                 ? { preparedAuth: params.startupPreparedAuth }
                 : { authProfileId: params.startupAuthProfileId }),
               authRequirement: params.startupAuthRequirement,
+              preparedModelRoute: params.startupModelRoute,
               authProfileStore: attemptParams.authProfileStore,
               authBindingFingerprint: params.startupAuthBindingFingerprint,
               ...(params.runtimeArtifactRequest

@@ -24,8 +24,9 @@ Keep provider refs and runtime policy separate:
 
 - Use `openai/gpt-*` for canonical OpenAI model selection. The prefix alone
   never selects Codex.
-- With runtime unset or `auto`, only an exact official HTTPS Platform Responses
-  or ChatGPT Responses route with no authored provider request override may
+- With runtime unset or `auto`, an exact official HTTPS Platform Responses,
+  ChatGPT Responses, or `http://127.0.0.1:2455/v1` OpenAI Responses route
+  with no authored provider request override may
   select Codex implicitly. Valid model-scoped Fast-mode and cutoff controls do
   not count as authored request params.
 - Do not use legacy Codex GPT refs in config; run `openclaw doctor --fix` to
@@ -214,3 +215,54 @@ fallback. Authored request overrides may instead use the
 [selection-time OpenClaw fallback](/concepts/agent-runtimes#runtime-selection)
 that preserves the exact request. Once Codex starts, its failures are not replayed
 through OpenClaw.
+
+### Configured Responses gateways
+
+Codex can use the exact operator-configured API-key Responses gateway
+`http://127.0.0.1:2455/v1` without transport overrides. Other custom endpoints
+remain on the OpenClaw runtime. Use the canonical
+`openai` provider, an explicit `openai-responses` adapter, and the default managed
+local app-server with its isolated agent home:
+
+API-key isolated completions use OpenClaw's existing host-prepared Responses
+transport, retaining the exact configured gateway and current model permission.
+Detached native bounded turns, including settled-turn finalization, do not receive
+retained host source authority. They reject custom prepared Responses routes
+before creating an app-server client or thread. Official native routes keep their
+existing bounded-turn behavior.
+
+```json5
+{
+  models: {
+    providers: {
+      openai: {
+        api: "openai-responses",
+        baseUrl: "http://192.168.20.10:8317/v1",
+        apiKey: { source: "env", provider: "default", id: "CUSTOM_RESPONSES_API_KEY" },
+        agentRuntime: { id: "codex" },
+        models: [
+          { id: "proxy-model", name: "Gateway model", contextWindow: 200000, maxTokens: 8192 },
+        ],
+      },
+    },
+  },
+  agents: { defaults: { model: "openai/proxy-model" } },
+  plugins: { entries: { codex: { enabled: true } } },
+}
+```
+
+OpenClaw installs the exact prepared destination in native startup configuration
+before initialization or API-key login. The native process uses a custom
+Responses provider with OpenAI backend routes, WebSockets, standalone search,
+and native account model discovery disabled. Configured provider rows remain
+authoritative. No default OpenAI endpoint is substituted for this route.
+
+The existing parent-local inference relay retains the fixed upstream and current
+model authority. Its private-network exception covers only the authored origin;
+redirects and native provider changes are rejected. OpenClaw dynamic tools keep
+their normal tool policy. Resume, compaction, and host-owned side questions retain
+the same prepared route.
+
+This route requires a prepared API key and managed local stdio. Remote app-server
+connections, user-scoped native accounts, subscription credentials, URL credentials,
+query strings, fragments, and authored request overrides cannot opt into it.

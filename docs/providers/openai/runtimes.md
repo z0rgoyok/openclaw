@@ -27,8 +27,9 @@ endpoint and adapter:
 | Effective route facts                                                                                                                                                           | Implicit runtime      |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
 | Exact official Platform HTTPS endpoint with `openai-responses`, or exact official ChatGPT HTTPS endpoint with `openai-chatgpt-responses`; no authored provider request override | Codex may be selected |
+| Exact `http://127.0.0.1:2455/v1` endpoint with `openai-responses`; no authored provider request override                                                                        | Codex may be selected |
 | Authored `openai-completions` adapter                                                                                                                                           | OpenClaw              |
-| Custom endpoint                                                                                                                                                                 | OpenClaw              |
+| Other custom endpoints                                                                                                                                                          | OpenClaw              |
 | Explicit exact official endpoint using HTTP                                                                                                                                     | Rejected              |
 | Route with an authored provider/model request override                                                                                                                          | OpenClaw              |
 
@@ -230,7 +231,7 @@ OpenClaw can continue the existing session after a transient provider failure.
 ## Native Codex app-server auth
 
 The native Codex app-server harness uses `openai/*` model refs when an eligible
-exact official HTTPS route selects it implicitly, or when provider/model
+official HTTPS route or the exact local Responses relay selects it implicitly, or when provider/model
 `agentRuntime.id: "codex"` selects it explicitly. Its auth is still
 account-based. OpenClaw selects auth in this order:
 

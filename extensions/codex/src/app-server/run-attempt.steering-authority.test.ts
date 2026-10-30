@@ -1,4 +1,5 @@
 import {
+  queueAgentHarnessMessage,
   runAgentHarnessGatewayQuestion,
   type setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -33,6 +34,94 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 setupRunAttemptTestHooks();
 
 describe("Codex source-bound pending input", () => {
+  it.each(["optional", "required"] as const)(
+    "steers matching %s reply input into the registered active turn exactly once",
+    async (terminalReplyExpectation) => {
+      registrations.mockClear();
+      const harness = createStartedThreadHarness();
+      const params = createTestParams();
+      params.terminalReplyExpectation = terminalReplyExpectation;
+      params.toolAuthorityFingerprint = "reply-expectation-authority";
+      const run = runCodexAppServerAttempt(params);
+      await run.waitForTurnAccepted();
+      try {
+        const onRejectedAccepted = vi.fn();
+        const handle = registrations.mock.calls.findLast(
+          (call) => call[0] === params.sessionId,
+        )?.[1] as Parameters<typeof setActiveEmbeddedRun>[1] | undefined;
+        if (!handle?.messageInjectionV2) {
+          throw new Error("Expected the registered Codex active-turn injection capability");
+        }
+        const injection = handle.messageInjectionV2;
+        const queueMessage = injection.queueMessage.bind(injection);
+        const deliveries: ReturnType<typeof queueMessage>[] = [];
+        vi.spyOn(injection, "queueMessage").mockImplementation((...args) => {
+          const delivery = queueMessage(...args);
+          deliveries.push(delivery);
+          return delivery;
+        });
+        expect(
+          queueAgentHarnessMessage(params.sessionId, "different reply policy", {
+            isInboundUserMessage: true,
+            toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+            terminalReplyExpectation:
+              terminalReplyExpectation === "optional" ? "required" : "optional",
+            debounceMs: 0,
+            onQueueAccepted: onRejectedAccepted,
+          }),
+        ).toBe(false);
+        expect(harness.requests.some(({ method }) => method === "turn/steer")).toBe(false);
+
+        const accepted = createDeferred<boolean>();
+        const onQueueAccepted = vi.fn((value: boolean) => accepted.resolve(value));
+        expect(
+          queueAgentHarnessMessage(params.sessionId, "exclude cancelled applications", {
+            terminalReplyExpectation,
+            toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+            debounceMs: 0,
+            isInboundUserMessage: true,
+            waitForTranscriptCommit: true,
+            onQueueAccepted,
+          }),
+        ).toBe(true);
+        await harness.waitForMethod("turn/steer");
+        expect(await accepted.promise).toBe(true);
+        expect(deliveries).toHaveLength(1);
+        expect(harness.requests.filter(({ method }) => method === "turn/steer")).toEqual([
+          {
+            method: "turn/steer",
+            params: {
+              threadId: "thread-1",
+              expectedTurnId: "turn-1",
+              input: [{ type: "text", text: "exclude cancelled applications", text_elements: [] }],
+              clientUserMessageId: "openclaw:turn-1:steer:1",
+            },
+          },
+        ]);
+        await harness.notify({
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "steered-user-message",
+              type: "userMessage",
+              clientId: "openclaw:turn-1:steer:1",
+            },
+          },
+        });
+        await expect(deliveries[0]).resolves.toBeUndefined();
+        expect(onQueueAccepted).toHaveBeenCalledOnce();
+        expect(onRejectedAccepted).not.toHaveBeenCalled();
+      } finally {
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+        await run;
+      }
+      expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
+      expect(harness.requests.filter(({ method }) => method === "turn/steer")).toHaveLength(1);
+    },
+  );
+
   it("retains the resolved agent in a raw global registration", async () => {
     registrations.mockClear();
     const harness = createStartedThreadHarness();

@@ -336,8 +336,9 @@ Legacy Codex auth profile ids and legacy Codex auth order entries are
 repaired by `openclaw doctor --fix`.
 
 With provider/model runtime policy unset or `auto`, the `openai/*` prefix alone
-never selects this harness. OpenAI may select Codex implicitly only for an
-exact official HTTPS Platform Responses or ChatGPT Responses route with no
+never selects this harness. OpenAI may select Codex implicitly for an
+exact official HTTPS Platform Responses, ChatGPT Responses, or
+`http://127.0.0.1:2455/v1` OpenAI Responses route with no
 authored provider request override. Valid model-scoped `params.fastMode` /
 `params.fast_mode` values and valid cutoff keys are typed agent-runtime
 controls, so they do not count as authored provider request params or select a

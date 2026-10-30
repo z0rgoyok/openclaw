@@ -84,7 +84,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 - The native Codex catalog can expose exact `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-luna` refs according to account access. It does not apply the direct API's bare `gpt-5.6` alias client-side.
 - `openai/gpt-5.5` uses the Codex catalog native `contextWindow = 400000` and default runtime `contextTokens = 272000`; override the runtime cap with `models.providers.openai.models[].contextTokens`
 - Sign in with `openai` auth and use `openai/gpt-6-astra` for a fresh subscription-backed setup. Select `openai/gpt-5.5` explicitly if that Codex workspace does not expose Astra.
-- Use provider/model `agentRuntime.id: "openclaw"` to keep an otherwise eligible route on the built-in runtime. With runtime unset or `auto`, only an exact official HTTPS Responses/ChatGPT-compatible route with no authored provider request override may select Codex implicitly.
+- Use provider/model `agentRuntime.id: "openclaw"` to keep an otherwise eligible route on the built-in runtime. With runtime unset or `auto`, an exact official HTTPS Responses/ChatGPT-compatible route or the exact `http://127.0.0.1:2455/v1` OpenAI Responses route with no authored provider request override may select Codex implicitly.
 - Legacy Codex GPT refs are legacy state, not a live provider route. Use canonical `openai/*` refs for new agent config, and run `openclaw doctor --fix` to migrate `codex/*` and `openai-codex/*` refs while preserving their native Codex semantics with model-scoped `agentRuntime.id: "codex"`. Existing explicit canonical `openai/gpt-5.5` selections are not upgraded.
 
 ```json5

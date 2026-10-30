@@ -5,7 +5,6 @@ import {
   type EmbeddedAgentCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { runWithAsyncWorkResources } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { isIncognitoSessionKey } from "../incognito-session.js";
@@ -15,7 +14,6 @@ import {
   CodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
-import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import {
   consumeCodexAppServerLiveThread,
   protectCodexAppServerLiveThread,
@@ -35,6 +33,10 @@ import {
   isSameNativeCompactionBinding,
 } from "./compact-helpers.js";
 import { watchCodexNativeCompactionCompletion } from "./compact-lifecycle.js";
+import {
+  prepareCodexCompactionInference,
+  resolveCodexCompactionConnection,
+} from "./compact-prepared-inference.js";
 import {
   codexNativeCompactionResult,
   failedCodexThreadBindingCompactionResult,
@@ -194,54 +196,21 @@ export async function maybeCompactCodexAppServerSession(
     });
   }
   let binding = initialBinding;
-  const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
-  let connection: Awaited<ReturnType<typeof resolveCodexBindingAppServerConnection>>;
-  try {
-    const config = params.config ?? {};
-    connection = await resolveCodexBindingAppServerConnection({
-      binding,
-      authProfileId: requestedAuthProfileId ?? binding.authProfileId,
-      pluginConfig: options.pluginConfig,
-      config,
-      assertCurrent,
-      agentDir: resolveAgentDir(config, bindingIdentity.agentId),
-    });
-  } catch (error) {
-    return {
-      ok: false,
-      compacted: false,
-      reason: coerceErrorMessage(error),
-    };
+  const preparedConnection = await resolveCodexCompactionConnection(
+    params,
+    binding,
+    options.pluginConfig,
+    bindingIdentity.agentId,
+    assertCurrent,
+  );
+  if ("result" in preparedConnection) {
+    return preparedConnection.result;
   }
+  const { connection, runtimeAuthPlan, preparedApiKey, preparedResponsesRoute } =
+    preparedConnection;
   const { appServer, usesSupervisionConnection } = connection;
-  if (
-    !usesSupervisionConnection &&
-    requestedAuthProfileId &&
-    binding.authProfileId &&
-    binding.authProfileId !== requestedAuthProfileId
-  ) {
-    // A session binding belongs to the auth profile that created it; compacting
-    // with another profile risks operating on a different Codex account.
-    return { ok: false, compacted: false, reason: "auth profile mismatch for session binding" };
-  }
   const shouldReleaseDefaultLease = !options.clientFactory;
   const clientFactory = options.clientFactory ?? createIsolatedCodexAppServerClient;
-  const runtimeAuthPlan = usesSupervisionConnection
-    ? undefined
-    : (params.runtimeAuthPlan ?? params.runtimePlan?.auth);
-  // A user-home app-server keeps its native Codex account; injecting a prepared key
-  // would rewrite the CODEX_HOME auth that Codex CLI and Desktop share.
-  const usesPreparedApiKey =
-    appServer.start.homeScope !== "user" &&
-    runtimeAuthPlan?.modelRoute?.authRequirement === "api-key";
-  const preparedApiKey = usesPreparedApiKey ? params.resolvedApiKey?.trim() : undefined;
-  if (usesPreparedApiKey && !preparedApiKey) {
-    return {
-      ok: false,
-      compacted: false,
-      reason: "Prepared Codex Platform compaction route is missing its resolved API key.",
-    };
-  }
   return await runWithAsyncWorkResources(async (onAcquired) => {
     const modelSource = params.hostCapabilities.retainSourceAuthority();
     let modelSourceTransferred = false;
@@ -261,6 +230,7 @@ export async function maybeCompactCodexAppServerSession(
     const assertAdmissionCurrent = () => {
       attempt.hostCapabilities.assertActive();
       assertCurrent();
+      modelSource?.assertCurrent();
     };
     try {
       return await withCodexAppServerThreadMutationHold(
@@ -282,6 +252,7 @@ export async function maybeCompactCodexAppServerSession(
                 ? { preparedAuth: { kind: "api-key" as const, apiKey: preparedApiKey } }
                 : { authProfileId: connection.clientAuthProfileId }),
               authRequirement: runtimeAuthPlan?.modelRoute?.authRequirement,
+              preparedModelRoute: runtimeAuthPlan?.modelRoute,
               agentDir: attempt.agentDir,
               config: attempt.config,
               assertCurrent: assertAdmissionCurrent,
@@ -299,9 +270,17 @@ export async function maybeCompactCodexAppServerSession(
           let temporaryClientExited = true;
           let compactionRequestDefinitelyRejected = false;
           let tokensAfter: number | undefined;
+          let compactionModelProvider: string | undefined;
+          let compactionInference:
+            | Awaited<ReturnType<typeof prepareCodexCompactionInference>>
+            | undefined;
           let modelOwner:
             | Awaited<ReturnType<typeof codexNativeSubagentMonitorRuntime.register>>
             | undefined;
+          const assertCompactionRoute = () => {
+            assertAdmissionCurrent();
+            compactionInference?.assertCurrent();
+          };
           const releaseCompactionThread = async (threadId: string) => {
             if (
               await unsubscribeCodexThreadBestEffort(client, {
@@ -337,7 +316,7 @@ export async function maybeCompactCodexAppServerSession(
                 runtimeModel.id === attempt.model
                   ? {
                       nativeModel: {
-                        provider: attempt.provider,
+                        provider: compactionModelProvider ?? attempt.provider,
                         model: readCodexRuntimeModelId(runtimeModel, attempt.model),
                       },
                       authorizedModel: { provider: attempt.provider, model: attempt.model },
@@ -385,6 +364,17 @@ export async function maybeCompactCodexAppServerSession(
             },
           });
           const acquireThreadSubscription = async (timeoutMs?: number) => {
+            if (preparedResponsesRoute) {
+              compactionInference = await prepareCodexCompactionInference({
+                client,
+                cwd: binding.cwd ?? attempt.workspaceDir,
+                baseUrl: preparedResponsesRoute.baseUrl,
+                operatorBacked: modelSource !== undefined,
+                signal: attempt.abortSignal,
+                assertCurrent: assertAdmissionCurrent,
+              });
+              compactionModelProvider = compactionInference.modelProvider;
+            }
             if (!isIncognitoSessionKey(attempt.sessionKey)) {
               // Remove any idle ownership first: sibling cleanup must not evict
               // this subscription while compaction still awaits terminal events.
@@ -396,13 +386,28 @@ export async function maybeCompactCodexAppServerSession(
                 const resumed = await resumeCodexAppServerThread({
                   client,
                   abandonClient: async () => closeCodexStartupClientBestEffort(client),
-                  request: { threadId: binding.threadId, excludeTurns: true },
+                  request: {
+                    threadId: binding.threadId,
+                    excludeTurns: true,
+                    ...(compactionInference
+                      ? {
+                          modelProvider: compactionModelProvider,
+                          config: compactionInference.config,
+                        }
+                      : {}),
+                  },
                   timeoutMs: timeoutMs ?? appServer.requestTimeoutMs,
-                  assertCurrent,
+                  assertCurrent: assertCompactionRoute,
                   signal: attempt.abortSignal,
                 });
                 releaseThreadSubscription = async () => releaseCompactionThread(binding.threadId);
                 assertCodexSupervisionThreadLineage(binding, resumed.thread);
+                if (compactionInference) {
+                  if (typeof resumed.modelProvider !== "string") {
+                    throw new Error("Codex compaction resume did not report its model provider.");
+                  }
+                  compactionInference.bind(binding.threadId, resumed.modelProvider);
+                }
               } else if (binding.connectionScope === "supervision") {
                 releaseThreadSubscription = async () =>
                   retainedThreadOwnership?.release(binding.threadId);
@@ -418,7 +423,12 @@ export async function maybeCompactCodexAppServerSession(
                 retainedThreadOwnership.assertCurrent();
                 assertCodexSupervisionThreadLineage(binding, thread);
               }
+              if (retainedThreadOwnership) {
+                compactionInference?.assertBound(binding.threadId);
+              }
               releaseThreadSubscription ??= async () => releaseCompactionThread(binding.threadId);
+            } else {
+              compactionInference?.assertBound(binding.threadId);
             }
           };
           try {
@@ -533,7 +543,7 @@ export async function maybeCompactCodexAppServerSession(
                       signal: attempt.abortSignal,
                       assertCurrent: () => {
                         try {
-                          assertAdmissionCurrent();
+                          assertCompactionRoute();
                         } catch (error) {
                           // This physical pre-write rejection proves no compaction
                           // started, including retries after ingress overload.

@@ -4,6 +4,11 @@ import {
 } from "./auth-profile.js";
 import type { CodexAppServerHomeScope } from "./config-contracts.js";
 import {
+  CODEX_PREPARED_RESPONSES_PROVIDER,
+  readCodexPreparedResponsesRoute,
+  type CodexPreparedModelRoute,
+} from "./prepared-responses-route.js";
+import {
   CODEX_RESPONSES_OAUTH_PROVIDER,
   isCodexResponsesOAuthCredential,
 } from "./responses-oauth.js";
@@ -41,6 +46,7 @@ export function resolveCodexAppServerThreadModelSelection(
     model: string;
     requestModel?: string;
     inheritBindingAuthProfile?: boolean;
+    preparedModelRoute?: CodexPreparedModelRoute;
     binding?: Pick<
       CodexAppServerThreadBinding,
       "threadId" | "authProfileId" | "model" | "modelProvider"
@@ -66,7 +72,9 @@ export function resolveCodexAppServerThreadModelSelection(
   return resolveCodexAppServerRequestModelSelection({
     ...params,
     model: params.requestModel ?? params.model,
-    modelProvider: explicitModelProvider ?? bindingModelProvider,
+    modelProvider: readCodexPreparedResponsesRoute(params.preparedModelRoute)
+      ? CODEX_PREPARED_RESPONSES_PROVIDER
+      : (explicitModelProvider ?? bindingModelProvider),
     authProfileId,
   });
 }

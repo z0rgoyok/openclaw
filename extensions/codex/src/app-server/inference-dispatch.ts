@@ -64,6 +64,8 @@ export function authorizationFailure(error: unknown): string | undefined {
 export function createCodexInferenceModelBinding(params: {
   client: CodexAppServerClient;
   provider: string;
+  /** Transport aliases retain their native mapping while admission uses the authored provider. */
+  logicalProvider?: string;
   modelPolicyEnforced?: boolean;
   assertCurrent: () => void;
   memoryConfigured: () => boolean;
@@ -194,7 +196,7 @@ export function createCodexInferenceModelBinding(params: {
               : mapping?.nativeModel.provider === provider &&
                   mapping.nativeModel.model === body.model
                 ? mapping.authorizedModel
-                : { provider, model: body.model },
+                : { provider: params.logicalProvider ?? provider, model: body.model },
           );
         } catch {
           cancelNativeTurn();
