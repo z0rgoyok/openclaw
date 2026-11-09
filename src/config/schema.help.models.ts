@@ -14,6 +14,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Override the hosted model catalog URL for a self-hosted HTTPS mirror (localhost HTTP is allowed for testing). Changes apply after a Gateway restart.",
   "models.providers.*.baseUrl":
     "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
+  "models.providers.*.modelListUrl":
+    "Optional OpenAI-compatible /models endpoint. The OpenAI provider refreshes this list while Gateway runs, so newly published proxy routes appear without editing every client catalog.",
   "models.providers.*.apiKey":
     "Provider credential used for API-key based authentication when the provider requires direct key auth. Use secret/env substitution and avoid storing real keys in committed config files.",
   "models.providers.*.auth":

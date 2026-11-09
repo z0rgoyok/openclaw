@@ -144,6 +144,8 @@ const OPENAI_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
 type BuildOpenAILiveProviderConfigParams = {
   apiKey: string;
   baseUrl?: string;
+  /** Optional OpenAI-compatible model-list endpoint for a custom base URL. */
+  modelListUrl?: string;
   discoveryApiKey?: string;
   env?: Record<string, string | undefined>;
   fetchGuard?: LiveModelCatalogFetchGuard;
@@ -201,6 +203,44 @@ async function buildOpenAILiveProviderConfig(
   const fallback = buildOpenAIStaticPlatformProviderConfig(params.apiKey, baseUrl);
   const models = fallback.models;
   if (!isOpenAIApiBaseUrl(baseUrl)) {
+    if (params.modelListUrl && classifyOpenAIBaseUrl(baseUrl) === "custom") {
+      const { buildOpenAICompatibleLiveModelProviderConfig, LiveModelCatalogHttpError } =
+        await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
+      try {
+        const provider = await buildOpenAICompatibleLiveModelProviderConfig({
+          providerId: PROVIDER_ID,
+          providerConfig: { baseUrl, api: "openai-responses", models: [] },
+          apiKey: params.apiKey,
+          discoveryApiKey: params.discoveryApiKey,
+          fetchGuard: params.fetchGuard,
+          signal: params.signal,
+          discoveryMode: "strict",
+          modelDiscovery: {
+            endpointUrl: { url: params.modelListUrl, requireBaseUrl: baseUrl },
+            timeoutMs: 5_000,
+            ttlMs: OPENAI_MODELS_CACHE_TTL_MS,
+          },
+        });
+        return {
+          provider: { ...provider, baseUrl, api: "openai-responses" },
+          outcome: { provider: PROVIDER_ID, status: "ready" },
+        };
+      } catch (error) {
+        if (
+          error instanceof LiveModelCatalogHttpError &&
+          (error.status === 401 || error.status === 403)
+        ) {
+          return {
+            provider: { ...fallback, models: [] },
+            outcome: { provider: PROVIDER_ID, status: "auth-rejected" },
+          };
+        }
+        return {
+          provider: { ...fallback, models: [] },
+          outcome: { provider: PROVIDER_ID, status: "unavailable" },
+        };
+      }
+    }
     return { provider: fallback };
   }
   const [
@@ -500,6 +540,15 @@ function resolveOpenAICatalogBaseUrl(ctx: {
     normalizeOptionalString(configuredProvider?.baseUrl) ??
     resolveOpenAIDefaultBaseUrl(ctx.env ?? process.env)
   );
+}
+
+function configuredOpenAIModelListUrl(ctx: {
+  config?: { models?: { providers?: Record<string, { modelListUrl?: string } | undefined> } };
+}): string | undefined {
+  const configuredProvider = Object.entries(ctx.config?.models?.providers ?? {}).find(
+    ([providerId]) => normalizeProviderId(providerId) === PROVIDER_ID,
+  )?.[1];
+  return normalizeOptionalString(configuredProvider?.modelListUrl);
 }
 
 function shouldUseOpenAIResponsesTransport(params: {
@@ -873,6 +922,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
             await buildOpenAILiveProviderConfig({
               apiKey: auth.apiKey,
               baseUrl: resolveOpenAICatalogBaseUrl(ctx),
+              modelListUrl: configuredOpenAIModelListUrl(ctx),
               discoveryApiKey,
             }),
             auth.profileId,

@@ -554,6 +554,8 @@ const ModelProviderSchema = z
     // Bundled provider overlays are materialized with an empty-string sentinel.
     // ModelProvidersSchema below still rejects empty baseUrl values for custom providers.
     baseUrl: z.string().optional(),
+    /** Optional OpenAI-compatible model-list endpoint for live catalog discovery. */
+    modelListUrl: z.string().url().optional(),
     /** API key or secret reference for this provider. */
     apiKey: SecretInputSchema.optional().register(sensitive),
     /** Authentication mode used when resolving credentials for this provider. */
