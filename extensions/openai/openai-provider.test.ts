@@ -41,6 +41,7 @@ async function runCatalogWithFetchGuard(params: {
   };
   accountId?: string;
   baseUrl?: string;
+  modelListUrl?: string;
 }): Promise<OpenAITestCatalogResult> {
   if (params.auth.mode === "oauth") {
     mocks.resolveApiKeyForProvider.mockResolvedValue({
@@ -68,7 +69,17 @@ async function runCatalogWithFetchGuard(params: {
         discoveryApiKey: params.auth.discoveryApiKey,
       }),
       config: params.baseUrl
-        ? { models: { providers: { openai: { baseUrl: params.baseUrl, models: [] } } } }
+        ? {
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: params.baseUrl,
+                  models: [],
+                  ...(params.modelListUrl ? { modelListUrl: params.modelListUrl } : {}),
+                },
+              },
+            },
+          }
         : { auth: { profiles: {} } },
       agentDir: "/tmp/openai-agent",
       workspaceDir: "/tmp/openai-workspace",
@@ -85,6 +96,7 @@ async function runCatalogWithFetchGuard(params: {
 async function buildOpenAILiveProviderConfig(params: {
   apiKey: string;
   baseUrl?: string;
+  modelListUrl?: string;
   fetchGuard: LiveModelCatalogFetchGuard;
 }): Promise<ModelProviderConfig> {
   return (
@@ -92,6 +104,7 @@ async function buildOpenAILiveProviderConfig(params: {
       fetchGuard: params.fetchGuard,
       auth: { mode: "api_key", apiKey: params.apiKey, source: "profile" },
       baseUrl: params.baseUrl,
+      modelListUrl: params.modelListUrl,
     })
   ).provider;
 }
@@ -878,6 +891,40 @@ describe("buildOpenAIProvider", () => {
     ).toMatchObject({
       kind: "routes",
       routes: [{ api: provider.api, baseUrl: customBaseUrl }],
+    });
+  });
+
+  it("discovers a custom OpenAI-compatible catalog when its configured models are empty", async () => {
+    const customBaseUrl = "http://127.0.0.1:2455/v1";
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
+      response: Response.json({
+        data: [
+          { id: "deepseek-v4.1-flash", object: "model" },
+          { id: "future-route", object: "model", context_window: 262144, max_output_tokens: 16384 },
+        ],
+      }),
+      finalUrl: `${customBaseUrl}/models`,
+      release: async () => undefined,
+    }));
+
+    const provider = await buildOpenAILiveProviderConfig({
+      apiKey: "sk-respan",
+      baseUrl: customBaseUrl,
+      modelListUrl: `${customBaseUrl}/models`,
+      fetchGuard,
+    });
+
+    expect(fetchGuard).toHaveBeenCalledOnce();
+    expect(fetchGuard.mock.calls[0]?.[0].url).toBe(`${customBaseUrl}/models`);
+    expect(provider.baseUrl).toBe(customBaseUrl);
+    expect(provider.api).toBe("openai-responses");
+    expect(provider.models.map((model) => model.id)).toEqual([
+      "deepseek-v4.1-flash",
+      "future-route",
+    ]);
+    expect(provider.models.find((model) => model.id === "future-route")).toMatchObject({
+      contextWindow: 262144,
+      maxTokens: 16384,
     });
   });
 

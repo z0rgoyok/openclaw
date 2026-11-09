@@ -113,6 +113,31 @@ describe("agent timeoutSeconds config", () => {
 });
 
 describe("model provider localService config", () => {
+  it("accepts a model list URL for a custom OpenAI-compatible catalog", () => {
+    const valid = OpenClawSchema.safeParse({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "http://127.0.0.1:2455/v1",
+            modelListUrl: "http://127.0.0.1:2455/v1/models",
+            models: [],
+          },
+        },
+      },
+    });
+    expect(valid.success).toBe(true);
+    if (valid.success) {
+      expect(valid.data.models?.providers?.openai?.modelListUrl).toBe(
+        "http://127.0.0.1:2455/v1/models",
+      );
+    }
+    expect(
+      OpenClawSchema.safeParse({
+        models: { providers: { openai: { modelListUrl: "not a url" } } },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts standalone timeout overlays for bundled model providers", () => {
     const result = OpenClawSchema.safeParse({
       models: {
