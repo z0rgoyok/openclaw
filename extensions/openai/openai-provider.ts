@@ -209,7 +209,7 @@ async function buildOpenAILiveProviderConfig(
       try {
         const provider = await buildOpenAICompatibleLiveModelProviderConfig({
           providerId: PROVIDER_ID,
-          providerConfig: { baseUrl, api: "openai-responses", models: [] },
+          providerConfig: { baseUrl, api: "openai-responses", models: fallback.models },
           apiKey: params.apiKey,
           discoveryApiKey: params.discoveryApiKey,
           fetchGuard: params.fetchGuard,
