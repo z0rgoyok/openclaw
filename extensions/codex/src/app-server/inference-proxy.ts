@@ -73,6 +73,10 @@ export async function createCodexInferenceProxy(params: {
   ) => Promise<CodexInferenceModelExecution> | CodexInferenceModelExecution;
 }) {
   const upstream = new URL(params.upstream);
+  const listenHost = process.env.OPENCLAW_CODEX_INFERENCE_LOOPBACK_HOST?.trim() || "127.0.0.1";
+  if (!/^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/u.test(listenHost)) {
+    throw new Error("Codex inference loopback host must be in 127.0.0.0/8");
+  }
   const preparedResponsesRoute = params.preparedResponsesRoute;
   const preparedPolicy = resolveCodexInferenceUpstreamPolicy(
     upstream,
@@ -711,7 +715,7 @@ export async function createCodexInferenceProxy(params: {
   try {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
+      server.listen(0, listenHost, () => {
         server.off("error", reject);
         resolve();
       });
@@ -725,7 +729,7 @@ export async function createCodexInferenceProxy(params: {
     return {
       context,
       upstream: upstream.toString(),
-      baseUrl: "http://127.0.0.1:" + address.port + pathPrefix,
+      baseUrl: "http://" + listenHost + ":" + address.port + pathPrefix,
       assertCurrent,
       close,
     };
