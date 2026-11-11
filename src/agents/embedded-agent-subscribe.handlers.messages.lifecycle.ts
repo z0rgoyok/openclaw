@@ -56,18 +56,33 @@ export function handleMessageStart(
   emitAssistantMessageStart(ctx);
 }
 
+function isSteeredUserInput(message: AgentMessage): boolean {
+  if (message.role !== "user") {
+    return false;
+  }
+  const metadata = Reflect.get(message, "__openclaw") as { steerTargetRunId?: unknown } | undefined;
+  return (
+    typeof metadata?.steerTargetRunId === "string" && metadata.steerTargetRunId.trim().length > 0
+  );
+}
+
 export function handleMessageEnd(
   ctx: EmbeddedAgentSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
 ): void | Promise<void> {
   const msg = evt.message;
   if (msg.role === "user" && ctx.state.lastAssistant) {
-    ctx.state.answerSegments.push({
-      textEnd: ctx.state.assistantTexts.length,
-      messageEnd: ctx.state.assistantMessageIndex,
-      finalMessageStart: ctx.state.assistantMessageStartIndex,
-      lastAssistant: ctx.state.lastAssistant,
-    });
+    // STEER inserts input into the active turn. Its preceding assistant item
+    // stays in transcript/context, while the terminal response covers every
+    // input accepted by that turn exactly once.
+    if (!isSteeredUserInput(msg)) {
+      ctx.state.answerSegments.push({
+        textEnd: ctx.state.assistantTexts.length,
+        messageEnd: ctx.state.assistantMessageIndex,
+        finalMessageStart: ctx.state.assistantMessageStartIndex,
+        lastAssistant: ctx.state.lastAssistant,
+      });
+    }
     ctx.state.sourceReplyDeliveryState = "missing";
     ctx.state.messageToolOnlySourceReplyDelivered = false;
     ctx.state.deterministicApprovalPromptPending = false;

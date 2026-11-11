@@ -509,7 +509,7 @@ describe("deferred reply supersession", () => {
   });
 
   it.each([false, true])(
-    "delivers each steered answer after a tool (skipped: %s)",
+    "delivers one final answer after steered input (skipped: %s)",
     async (skipped) => {
       const h = setup({ deferred: true });
       const progress = makeAgentAssistantMessage({
@@ -545,14 +545,22 @@ describe("deferred reply supersession", () => {
         h.message(first);
         h.emit({ type: "turn_end", message: first, toolResults: [] });
       }
-      const user = { role: "user", content: "Next question", timestamp: 0 };
-      h.emit({ type: "message_start", message: user });
-      h.emit({ type: "message_end", message: user });
+      const users = ["Next question", "Additional detail"].map((content) => ({
+        role: "user",
+        content,
+        timestamp: 0,
+        __openclaw: { steerTargetRunId: "terminal-delivery" },
+      }));
+      for (const user of users) {
+        h.emit({ type: "message_start", message: user });
+        h.emit({ type: "message_end", message: user });
+      }
       h.message(final);
       h.emit({ type: "turn_end", message: final, toolResults: [] });
       h.end([progress, first, final]);
       await h.drain();
-      const expected = [skipped ? "A1" : "A2", "A3"];
+      const expected = ["A3"];
+      expect(h.subscription.answerSegments).toHaveLength(0);
       expect(payloads(h.subscription).map((payload) => payload.text)).toEqual(expected);
       expect(h.onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual(expected);
     },
