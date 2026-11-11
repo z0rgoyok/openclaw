@@ -129,6 +129,24 @@ async function fixture(
 }
 
 describe("private inference HTTP relay", () => {
+  it.skipIf(process.platform === "darwin")(
+    "binds the private relay to a configured IPv4 loopback address",
+    async () => {
+      const previous = process.env.OPENCLAW_CODEX_INFERENCE_LOOPBACK_HOST;
+      process.env.OPENCLAW_CODEX_INFERENCE_LOOPBACK_HOST = "127.0.0.10";
+      try {
+        const { proxy } = await fixture();
+        expect(new URL(proxy.baseUrl).hostname).toBe("127.0.0.10");
+      } finally {
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_CODEX_INFERENCE_LOOPBACK_HOST;
+        } else {
+          process.env.OPENCLAW_CODEX_INFERENCE_LOOPBACK_HOST = previous;
+        }
+      }
+    },
+  );
+
   it("resolves host OAuth only for admitted Responses requests and refreshes once after 401", async () => {
     const resolve = vi.fn(async (forceRefresh: boolean) => ({
       token: forceRefresh ? "synthetic-refreshed" : "synthetic-access",
